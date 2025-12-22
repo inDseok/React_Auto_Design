@@ -1,0 +1,62 @@
+.tree-node {
+  position: relative;
+}
+
+.tree-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+}
+
+/* 노드 카드 */
+.tree-card {
+  margin-left: 20px;
+  padding: 6px 10px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  min-width: 240px;
+}
+
+.tree-card.selected {
+  background: #dbeafe;
+  border-color: #2563eb;
+}
+
+/* children 컨테이너 */
+.tree-children {
+  margin-left: 20px;
+  position: relative;
+}
+
+/* 각 child */
+.tree-child {
+  position: relative;
+  padding-left: 20px;
+}
+
+/* ├ / └ 가로선 */
+.tree-child::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 10px;                 /* ← 핵심 */
+  width: 30px;                /* 카드까지 길이 */
+  height: 1px;
+  background: #bbb;
+  transform: translateY(-50%);
+}
+
+
+/* 마지막 child면 세로선 끊기 */
+.tree-child:last-child::after {
+  content: "";
+  position: absolute;
+  top: 22px;
+  bottom: 0;
+  left: 10px;
+  width: 2px;
+  background: white;
+}
