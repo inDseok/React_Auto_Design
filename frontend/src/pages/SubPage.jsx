@@ -154,20 +154,20 @@ export default function SubPage() {
     }
 
     try {
-      // 1) 서버에 이동 요청 (API는 실제 구현에 맞게 변경 필요)
-      // 예: body에 source_id, new_parent_id, new_index 전달
       const payload = {
         node_id: dragNodeId,
         new_parent_id: parentId,
         new_index: index,
       };
 
-      const updated = await apiPatch(
-        `/api/bom/${state.bomId}/move-node?spec=${encodeURIComponent(state.selectedSpec)}`,
+      const updatedTree = await apiPatch(
+        `/api/bom/${state.bomId}/move-node?spec=${encodeURIComponent(
+          state.selectedSpec
+        )}`,
         payload
-      );      
+      );
 
-      // 2) 서버에서 전체 nodes를 내려준다고 가정
+      // 서버에서 전체 tree(or nodes)를 내려준다고 가정
       if (updatedTree?.nodes && Array.isArray(updatedTree.nodes)) {
         setNodes(updatedTree.nodes);
       } else {
@@ -177,10 +177,10 @@ export default function SubPage() {
       console.error("노드 이동 실패:", e);
       alert("노드 이동에 실패했습니다. 콘솔 로그를 확인하세요.");
     } finally {
-      // 드래그 끝
       setDragNodeId(null);
     }
   }
+
 
   /* =========================
      render

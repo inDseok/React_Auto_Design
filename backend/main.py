@@ -274,10 +274,13 @@ def move_node(
 
     # 5. 같은 부모 아래 order 재정렬 (권장)
     siblings = [n for n in nodes if n.parent_id == req.new_parent_id]
-    siblings.sort(key=lambda x: (n.order or 0))
+
+    # order가 None일 수도 있으니, None이면 0으로 간주
+    siblings.sort(key=lambda x: (x.order or 0))
 
     for i, n in enumerate(siblings):
         n.order = i
+
 
     # 6. JSON 저장
     save_tree_json(root_dir, spec, tree)
