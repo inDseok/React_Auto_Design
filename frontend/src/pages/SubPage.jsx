@@ -1,112 +1,190 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import { Link } from "react-router-dom";
 import { useApp } from "../state/AppContext";
-import { apiGet } from "../api/client";
+import { apiGet, apiPatch } from "../api/client";
 import UploadBom from "./UploadBom";
 import SpecSelector from "./SpecSelector";
 import TreeView from "./TreeView";
 import SelectedPartPanel from "./SelectedPartPanel";
 
-function normalizeTreeTypes(tree) {
-    if (!tree || !Array.isArray(tree.nodes)) return tree;
-  
-    return {
-      ...tree,
-      nodes: tree.nodes.map((n) => ({
-        ...n,
-  
-        // ✅ 문자열 ID 그대로 유지
-        id: n.id,
-        parent_id: n.parent_id,
-  
-        // order만 숫자로
-        order:
-          n.order === null || n.order === undefined || n.order === ""
-            ? 0
-            : Number(n.order),
-      })),
-    };
-  }
+/* =========================
+   utils
+========================= */
 
-function findNodeById(node, targetId) {
-    if (!node) return null;
-    
-    if (node._id === targetId) return node;
-    
-    if (!Array.isArray(node.children)) return null;
-    
-    for (const child of node.children) {
-    const found = findNodeById(child, targetId);
-    if (found) return found;
+// flat nodes → tree (렌더링 전용)
+function buildTree(nodes) {
+  if (!Array.isArray(nodes)) return [];
+
+  const map = new Map();
+  const roots = [];
+
+  nodes.forEach((n) => {
+    map.set(n.id, { ...n, children: [] });
+  });
+
+  map.forEach((node) => {
+    if (node.parent_id === null) {
+      roots.push(node);
+    } else {
+      const parent = map.get(node.parent_id);
+      parent ? parent.children.push(node) : roots.push(node);
     }
-    
-    return null;
+  });
+
+  const sortRecursively = (list) => {
+    list.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    list.forEach((n) => sortRecursively(n.children));
+  };
+
+  sortRecursively(roots);
+  return roots;
 }
+
+// flat nodes에서 단일 노드 찾기
+function findNodeById(nodes, id) {
+  if (!Array.isArray(nodes) || !id) return null;
+  return nodes.find((n) => n.id === id) ?? null;
+}
+
+
+/* =========================
+   SubPage
+========================= */
+
 export default function SubPage() {
   const { state, actions } = useApp();
-  const [tree, setTree] = useState(null);
+
+  const [nodes, setNodes] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+  const [dragNodeId, setDragNodeId] = useState(null);
 
-  const canLoadTree = Boolean(state.bomId && state.selectedSpec);
+  // ⛳ bomId lock
+  const fixedBomIdRef = useRef(null);
+  const hasLoadedRef = useRef(false);
 
-  const selectedNode = useMemo(() => {
-    if (!tree || !state.selectedNodeId) return null;
-    return findNodeById(tree, state.selectedNodeId);
-    }, [tree, state.selectedNodeId]);
-
+  // bomId 고정 / 교체 로직
   useEffect(() => {
-    let ignore = false;
+    if (!state.bomId) return;
 
-    async function load() {
+    if (!fixedBomIdRef.current) {
+      fixedBomIdRef.current = state.bomId;
+      console.log("고정된 bomId:", fixedBomIdRef.current);
+      return;
+    }
+
+    if (state.bomId !== fixedBomIdRef.current) {
+      const isNewRun =
+        !state.selectedSpec && !state.selectedNodeId;
+
+      if (isNewRun) {
+        fixedBomIdRef.current = state.bomId;
+        hasLoadedRef.current = false;
+        setNodes(null);
+        setErr("");
+        console.log("bomId 갱신:", fixedBomIdRef.current);
+      } else {
+        console.warn("새로운 bomId 무시:", state.bomId);
+      }
+    }
+  }, [state.bomId, state.selectedSpec, state.selectedNodeId]);
+
+  const activeBomId = fixedBomIdRef.current;
+
+  // tree(nodes) 로드
+  useEffect(() => {
+    if (!activeBomId || !state.selectedSpec) return;
+    if (hasLoadedRef.current) return;
+
+    hasLoadedRef.current = true;
+
+    async function loadTree() {
+      setLoading(true);
       setErr("");
 
-      if (!canLoadTree) {
-        setTree(null);
-        return;
-      }
-
-      // 1) 캐시 우선
-      if (state.treeCache && state.treeCache?.spec === state.selectedSpec) {
-        setTree(state.treeCache.tree);
-        return;
-      }
-
-      // 2) 없으면 서버에서 로드
-      setLoading(true);
       try {
         const raw = await apiGet(
-          `/api/bom/${encodeURIComponent(state.bomId)}/tree?spec=${encodeURIComponent(
-            state.selectedSpec
-          )}`
+          `/api/bom/${encodeURIComponent(
+            activeBomId
+          )}/tree?spec=${encodeURIComponent(state.selectedSpec)}`
         );
 
-        const normalized = normalizeTreeTypes(raw);
+        console.log("RAW TREE RESPONSE =", raw);
 
-        if (ignore) return;
+        if (!raw?.nodes || !Array.isArray(raw.nodes)) {
+          throw new Error("Invalid tree structure");
+        }
 
-        setTree(normalized);
-
-        // 캐시 저장(선택)
-        actions.setTreeCache({ spec: state.selectedSpec, tree: normalized });
+        setNodes(raw.nodes);
       } catch (e) {
-        if (ignore) return;
-        setTree(null);
+        setNodes(null);
         setErr(String(e?.message ?? e));
       } finally {
-        if (!ignore) setLoading(false);
+        setLoading(false);
       }
     }
 
-    load();
+    loadTree();
+  }, [activeBomId, state.selectedSpec]);
 
-    return () => {
-      ignore = true;
-    };
-  }, [canLoadTree, state.bomId, state.selectedSpec, state.treeCache, actions]);
+  /* ---------------------------------
+     선택 노드
+  --------------------------------- */
+  const selectedNode = useMemo(() => {
+    return findNodeById(nodes, state.selectedNodeId);
+  }, [nodes, state.selectedNodeId]);
 
+  const treeRoots = useMemo(() => buildTree(nodes), [nodes]);
 
-  
+  // Drag 시작 핸들러
+  function handleDragStartNode(nodeId) {
+    setDragNodeId(nodeId);
+  }
+
+  // Drop 핸들러
+  async function handleDropNode(parentId, index) {
+    if (!dragNodeId) {
+      console.warn("dragNodeId가 없습니다. 드래그 시작이 제대로 안 된 것 같습니다.");
+      return;
+    }
+
+    if (!state.bomId) {
+      console.warn("bomId가 없습니다.");
+      return;
+    }
+
+    try {
+      // 1) 서버에 이동 요청 (API는 실제 구현에 맞게 변경 필요)
+      // 예: body에 source_id, new_parent_id, new_index 전달
+      const payload = {
+        node_id: dragNodeId,
+        new_parent_id: parentId,
+        new_index: index,
+      };
+
+      const updated = await apiPatch(
+        `/api/bom/${state.bomId}/move-node?spec=${encodeURIComponent(state.selectedSpec)}`,
+        payload
+      );      
+
+      // 2) 서버에서 전체 nodes를 내려준다고 가정
+      if (updatedTree?.nodes && Array.isArray(updatedTree.nodes)) {
+        setNodes(updatedTree.nodes);
+      } else {
+        console.warn("updatedTree.nodes 구조가 예상과 다릅니다.", updatedTree);
+      }
+    } catch (e) {
+      console.error("노드 이동 실패:", e);
+      alert("노드 이동에 실패했습니다. 콘솔 로그를 확인하세요.");
+    } finally {
+      // 드래그 끝
+      setDragNodeId(null);
+    }
+  }
+
+  /* =========================
+     render
+  ========================= */
   return (
     <div style={{ padding: 16 }}>
       <h2>SUB PAGE</h2>
@@ -114,77 +192,47 @@ export default function SubPage() {
       <div style={{ marginBottom: 12 }}>
         <div>bomId: {String(state.bomId)}</div>
         <div>selectedSpec: {String(state.selectedSpec)}</div>
-        <div>sourceSheet: {String(state.sourceSheet)}</div>
         <div>selectedNodeId: {String(state.selectedNodeId)}</div>
       </div>
-    {/* ✅ BOM 업로드 */}
+
       <UploadBom />
       <SpecSelector />
+
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        <button onClick={() => actions.clearTreeCache()}>트리 캐시 비우기</button>
-        <button onClick={() => actions.resetAll()}>전체 초기화</button>
+        <button
+          onClick={() => {
+            fixedBomIdRef.current = null;
+            hasLoadedRef.current = false;
+            setNodes(null);
+            actions.resetAll();
+          }}
+        >
+          전체 초기화
+        </button>
         <Link to="/summary">요약 페이지로 이동</Link>
       </div>
 
-      {!canLoadTree && (
-        <div>사양을 먼저 선택하세요. (bomId와 selectedSpec 필요)</div>
+      {(!state.bomId || !state.selectedSpec) && (
+        <div>사양을 선택하세요.</div>
       )}
 
       {loading && <div>트리 로딩 중...</div>}
       {err && <div style={{ color: "crimson" }}>{err}</div>}
 
-      {tree && (
-        <div style={{ marginTop: 12 }}>
-          <div>nodes: {tree.nodes?.length ?? 0}</div>
-
-          {tree && (
-            <>
-                <TreeView
-                tree={buildTree(tree.nodes)}
-                selectedNodeId={state.selectedNodeId}
-                onSelect={(node) => actions.setSelectedNode(node._id)}
-                />
-            </>
-           )}
-        <SelectedPartPanel node={selectedNode} />
-        </div>
+      {treeRoots.length > 0 && (
+        <>
+          <TreeView
+            tree={treeRoots}
+            selectedNodeId={state.selectedNodeId}
+            onSelect={(node) => actions.setSelectedNode(node.id)}
+            onDragStartNode={handleDragStartNode}
+            onDropNode={handleDropNode}
+          />
+          <SelectedPartPanel node={selectedNode}
+          onUpdateNodes={(newNodes) => setNodes(newNodes)}
+          />
+        </>
       )}
     </div>
   );
 }
-export function buildTree(nodes) {
-    const nodeMap = new Map();
-    const roots = [];
-  
-    // 1. 노드 복사 + children 초기화
-    nodes.forEach((n, idx) => {
-      const id = n.id ?? idx; // id가 null이면 임시 id
-      nodeMap.set(id, { ...n, _id: id, children: [] });
-    });
-  
-    // 2. 부모-자식 연결
-    nodeMap.forEach((node) => {
-      if (node.parent_id === null) {
-        roots.push(node);
-      } else {
-        const parent = nodeMap.get(node.parent_id);
-        if (parent) {
-          parent.children.push(node);
-        } else {
-          // 부모가 없는 경우 → 루트 취급
-          roots.push(node);
-        }
-      }
-    });
-  
-    // 3. order 기준 정렬
-    function sortRecursively(list) {
-      list.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-      list.forEach((n) => sortRecursively(n.children));
-    }
-  
-    sortRecursively(roots);
-  
-    return roots;
-  }
-  

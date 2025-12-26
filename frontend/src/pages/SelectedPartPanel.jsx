@@ -1,97 +1,136 @@
 import React, { useEffect, useState } from "react";
-import { apiPatch } from "../api/client";
 import { useApp } from "../state/AppContext";
+import { apiPatch } from "../api/client";
 
-export default function SelectedPartPanel({ node }) {
-  const { state, actions } = useApp();
+export default function SelectedPartPanel({  node, onUpdateNodes }) {
+  const { state,actions } = useApp();
+
   const [form, setForm] = useState(null);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
 
+  // 선택 노드 바뀌면 form 초기화
   useEffect(() => {
     if (!node) {
       setForm(null);
       return;
     }
+
     setForm({
       name: node.name ?? "",
-      id: node.id ?? "",
       part_no: node.part_no ?? "",
       material: node.material ?? "",
-      qty: node.qty ?? 1,
+      qty: node.qty ?? "",
     });
+    setErr("");
   }, [node]);
 
-  if (!node || !form) {
-    return <div>선택된 부품이 없습니다.</div>;
+  if (!node) {
+    return (
+      <div style={{ padding: 12, border: "1px solid #ddd" }}>
+        선택된 부품이 없습니다.
+      </div>
+    );
+  }
+
+  function onChange(e) {
+    const { name, value } = e.target;
+    setForm((prev) => ({ ...prev, [name]: value }));
   }
 
   async function onSave() {
+    if (!state.bomId || !state.selectedSpec) {
+      setErr("BOM 또는 사양이 없습니다.");
+      return;
+    }
+
     setSaving(true);
     setErr("");
+
     try {
-      const tree = await apiPatch(
-        `/api/bom/${state.bomId}/node/${node.id}`,
-        form
+      const payload = {
+        name: form.name || null,
+        part_no: form.part_no || null,
+        material: form.material || null,
+        qty:
+          form.qty === "" || form.qty === null
+            ? null
+            : Number(form.qty),
+      };
+
+      const updatedTree = await apiPatch(
+        `/api/bom/${encodeURIComponent(state.bomId)}/node/${encodeURIComponent(node.id)}`,
+        payload
       );
-      actions.setTreeCache({
-        spec: state.selectedSpec,
-        tree,
-      });
+      
+      // 🔴 여기서 nodes를 즉시 갱신
+      onUpdateNodes(updatedTree.nodes);
+      
+      alert("저장되었습니다.");
     } catch (e) {
-      setErr(String(e.message ?? e));
+      setErr(String(e?.message ?? e));
     } finally {
       setSaving(false);
     }
   }
 
   return (
-    <div style={{ border: "1px solid #ccc", padding: 12, marginTop: 12 }}>
-      <h3>선택된 부품 수정</h3>
+    <div
+      style={{
+        padding: 12,
+        border: "1px solid #ddd",
+        minWidth: 260,
+      }}
+    >
+      <h4>선택된 부품</h4>
 
-      <label>
-        부품명
+      <div style={{ marginBottom: 8 }}>
+        <label>부품명</label>
         <input
-          value={form.id}
-          onChange={(e) => setForm({ ...form, id: e.target.value })}
+          name="name"
+          value={form?.name ?? ""}
+          onChange={onChange}
+          style={{ width: "100%" }}
         />
-      </label>
+      </div>
 
-      <label>
-        품번
+      <div style={{ marginBottom: 8 }}>
+        <label>품번</label>
         <input
-          value={form.part_no}
-          onChange={(e) => setForm({ ...form, part_no: e.target.value })}
+          name="part_no"
+          value={form?.part_no ?? ""}
+          onChange={onChange}
+          style={{ width: "100%" }}
         />
-      </label>
+      </div>
 
-      <label>
-        재질
+      <div style={{ marginBottom: 8 }}>
+        <label>재질</label>
         <input
-          value={form.material}
-          onChange={(e) => setForm({ ...form, material: e.target.value })}
+          name="material"
+          value={form?.material ?? ""}
+          onChange={onChange}
+          style={{ width: "100%" }}
         />
-      </label>
+      </div>
 
-      <label>
-        수량
+      <div style={{ marginBottom: 12 }}>
+        <label>수량</label>
         <input
+          name="qty"
           type="number"
           step="1"
-          value={form.qty}
-          onChange={(e) =>
-            setForm({ ...form, qty: Number(e.target.value) })
-          }
+          value={form?.qty ?? ""}
+          onChange={onChange}
+          style={{ width: "100%" }}
         />
-      </label>
-
-      <div style={{ marginTop: 8 }}>
-        <button onClick={onSave} disabled={saving}>
-          {saving ? "저장 중..." : "저장"}
-        </button>
       </div>
 
       {err && <div style={{ color: "crimson" }}>{err}</div>}
+
+      <button onClick={onSave} disabled={saving}>
+        {saving ? "저장 중..." : "저장"}
+      </button>
     </div>
   );
 }

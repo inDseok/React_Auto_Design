@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useApp } from "../state/AppContext";
 
 export default function SpecSelector() {
@@ -8,12 +8,22 @@ export default function SpecSelector() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
 
+  // 🔒 요청 순서 보호용
+  const reqIdRef = useRef(0);
+
   useEffect(() => {
-    if (!state.bomId) return;
+    if (!state.bomId) {
+      setSpecs([]);
+      setSelected("");
+      return;
+    }
+
+    const reqId = ++reqIdRef.current;
 
     async function loadSpecs() {
       setLoading(true);
       setErr("");
+
       try {
         const res = await fetch(
           `http://localhost:8000/api/bom/${state.bomId}/specs`,
@@ -25,11 +35,18 @@ export default function SpecSelector() {
         }
 
         const data = await res.json();
+
+        // ❗ bomId가 바뀐 뒤 도착한 응답이면 무시
+        if (reqId !== reqIdRef.current) return;
+
         setSpecs(data);
       } catch (e) {
-        setErr(String(e.message ?? e));
+        if (reqId !== reqIdRef.current) return;
+        setErr(String(e?.message ?? e));
       } finally {
-        setLoading(false);
+        if (reqId === reqIdRef.current) {
+          setLoading(false);
+        }
       }
     }
 
@@ -38,7 +55,6 @@ export default function SpecSelector() {
 
   function onConfirm() {
     if (!selected) return;
-    // ✅ 이게 핵심
     actions.setSpec(selected);
   }
 

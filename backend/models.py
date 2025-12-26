@@ -1,30 +1,44 @@
 from pydantic import BaseModel
 from typing import List, Optional
-from datetime import datetime
-from pydantic import Field
+from enum import Enum
 
-class TreeNode(BaseModel):
+
+class NodeType(str, Enum):
+    ASSY = "ASSY"
+    PART = "PART"
+
+
+class SubNode(BaseModel):
     id: str
-    name: Optional[str] = None
+    parent_id: Optional[str] = None
+    order: int
+    type: NodeType
+    name: str
     part_no: Optional[str] = None
-    qty: float = 1
     material: Optional[str] = None
-    children: List["TreeNode"] = Field(default_factory=list)
+    qty: Optional[float] = None
 
-TreeNode.model_rebuild()
 
 class TreeMeta(BaseModel):
     bom_id: str
-    bom_filename: str
     spec_name: str
-    created_at: datetime
+    bom_filename: Optional[str] = None
+
 
 class SubTree(BaseModel):
     meta: TreeMeta
-    root: TreeNode
+    nodes: List[SubNode]
 
-class TreeNodePatch(BaseModel):
+
+class SubNodePatch(BaseModel):
+    parent_id: Optional[str] = None
+    order: Optional[int] = None
     name: Optional[str] = None
     part_no: Optional[str] = None
     material: Optional[str] = None
     qty: Optional[float] = None
+
+class MoveNodeRequest(BaseModel):
+    node_id: str
+    new_parent_id: Optional[str] = None   # root도 허용
+    new_index: int

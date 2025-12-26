@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pathlib import Path
 
-from backend.models import TreeNodePatch
+from backend.models import SubNodePatch, SubTree, MoveNodeRequest
 from backend.bom_service import create_bom_run, DATA_DIR
 from backend.utills import find_node_by_id, load_tree_json, save_tree_json
 from backend.excel_loader import build_tree_from_sheet
@@ -105,16 +105,6 @@ def get_state(request: Request, response: Response):
 
 
 
-@app.get("/", response_class=HTMLResponse)
-def sub_page(request: Request):
-    return templates.TemplateResponse("sub_layout.html", {"request": request, "title": "SUB 구성도"})
-
-
-@app.get("/summary", response_class=HTMLResponse)
-def summary_page(request: Request):
-    return templates.TemplateResponse("summary.html", {"request": request, "title": "작업시간 분석표"})
-
-
 @app.post("/api/bom/upload")
 async def upload_bom(file: UploadFile = File(...)):
     binary = await file.read()
@@ -171,7 +161,7 @@ def list_specs(bom_id: str):
 
     return specs
 
-@app.get("/api/bom/{bom_id}/tree")
+@app.get("/api/bom/{bom_id}/tree", response_model=SubTree)
 def get_tree(
     bom_id: str,
     request: Request,
@@ -188,7 +178,7 @@ def get_tree(
     root_dir = DATA_DIR / "bom_runs" / bom_id
     tree_json_path = root_dir / f"{resolved_spec}.json"
 
-    # 1. 이미 저장된 트리가 있으면 그걸 사용
+    # 1. 캐시된 JSON 있으면 그대로 사용
     if tree_json_path.exists():
         tree = load_tree_json(root_dir, resolved_spec)
     else:
@@ -204,10 +194,7 @@ def get_tree(
 
         wb = load_workbook(tree_excel, data_only=True)
         if resolved_spec not in wb.sheetnames:
-            raise HTTPException(
-                status_code=400,
-                detail=f"시트 없음: {resolved_spec}"
-            )
+            raise HTTPException(status_code=400, detail=f"시트 없음: {resolved_spec}")
 
         ws = wb[resolved_spec]
 
@@ -218,7 +205,6 @@ def get_tree(
             spec_name=resolved_spec,
         )
 
-        # 🔴 여기서 최초 저장
         save_tree_json(root_dir, resolved_spec, tree)
 
     # 세션 갱신
@@ -232,13 +218,12 @@ def get_tree(
     return tree
 
 
-from backend.models import TreeNodePatch
 
-@app.patch("/api/bom/{bom_id}/node/{node_id}")
+@app.patch("/api/bom/{bom_id}/node/{node_id}", response_model=SubTree)
 def patch_node(
     bom_id: str,
     node_id: str,
-    patch: TreeNodePatch,
+    patch: SubNodePatch,
     request: Request,
     response: Response,
 ):
@@ -251,24 +236,50 @@ def patch_node(
 
     root_dir = DATA_DIR / "bom_runs" / bom_id
 
-    try:
-        tree = load_tree_json(root_dir, spec)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    tree = load_tree_json(root_dir, spec)
+    nodes = tree.nodes   # ✅ 핵심 수정
 
-    node = find_node_by_id(tree.root, node_id)
-    if not node:
+    # flat 구조에서 노드 찾기
+    target = next((n for n in nodes if n.id == node_id), None)
+    if not target:
         raise HTTPException(status_code=404, detail="노드 없음")
 
-    # 필드 반영
-    if patch.name is not None:
-        node.name = patch.name
-    if patch.part_no is not None:
-        node.part_no = patch.part_no
-    if patch.material is not None:
-        node.material = patch.material
-    if patch.qty is not None:
-        node.qty = patch.qty
+    # patch 적용 (Pydantic 객체 기준)
+    for field, value in patch.dict(exclude_unset=True).items():
+        setattr(target, field, value)
 
     save_tree_json(root_dir, spec, tree)
+
+    return tree
+
+@app.patch("/api/bom/{bom_id}/move-node")
+def move_node(
+    bom_id: str,
+    spec: str,                 # ⭐ 추가
+    req: MoveNodeRequest
+):
+    root_dir = DATA_DIR / "bom_runs" / bom_id
+    tree = load_tree_json(root_dir, spec)   # ⭐ spec 포함
+
+    nodes = tree.nodes
+    print("DEBUG nodes example =", nodes[:3])
+    
+    target = next((n for n in nodes if n.id == req.node_id), None)
+    if not target:
+        raise HTTPException(404, "node not found")
+
+    # 4. parent + order 변경
+    target.parent_id = req.new_parent_id
+    target.order = req.new_index
+
+    # 5. 같은 부모 아래 order 재정렬 (권장)
+    siblings = [n for n in nodes if n.parent_id == req.new_parent_id]
+    siblings.sort(key=lambda x: (n.order or 0))
+
+    for i, n in enumerate(siblings):
+        n.order = i
+
+    # 6. JSON 저장
+    save_tree_json(root_dir, spec, tree)
+
     return tree

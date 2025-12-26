@@ -132,6 +132,12 @@ export function AppProvider({ children }) {
             payload: { treeCache, lastLoadedAt: Date.now() },
           }),
 
+        setNodes: (nodes) =>
+          dispatch({
+           type: "SET_TREE_CACHE",
+           payload: { treeCache: nodes, lastLoadedAt: Date.now() },
+          }),
+          
         clearTreeCache: () => dispatch({ type: "CLEAR_TREE_CACHE" }),
       },
     };

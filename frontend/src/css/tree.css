@@ -60,3 +60,13 @@
   width: 2px;
   background: white;
 }
+
+.drop-zone {
+  height: 8px;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+
+.drop-zone.active {
+  background: #cce4ff;
+}

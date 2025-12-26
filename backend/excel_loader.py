@@ -1,11 +1,11 @@
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 import uuid
 
 import openpyxl
 from openpyxl.utils import get_column_letter
 
-from backend.models import SubTree, TreeNode, TreeMeta
+from backend.models import SubTree, SubNode, TreeMeta
 
 import re
 
@@ -137,63 +137,62 @@ def build_tree_from_sheet(
     bom_filename: str,
     spec_name: str
 ) -> SubTree:
+
     boxes = []
 
-    # 1. "부품명" 기준 block 추출
+    # 1. "부품명" 기준 block 수집
     for row in ws.iter_rows(
         min_row=1,
         max_row=ws.max_row,
         max_col=ws.max_column
     ):
         for cell in row:
-            v = cell.value
-            if v is None:
-                continue
-            if str(v).strip() == "부품명":
+            if cell.value and str(cell.value).strip() == "부품명":
                 box = parse_block(ws, spec_name, cell.row, cell.column)
                 boxes.append(box)
 
-    # 2. 위치 기준 정렬
+    # 2. 위치 기준 정렬 (위→아래, 좌→우)
     boxes_sorted = sorted(boxes, key=lambda b: (b["row"], b["col"]))
 
-    # 3. root 가상 노드
-    root = TreeNode(id="root")
+    nodes: List[SubNode] = []
 
-    stack: List[TreeNode] = []
+    # col 기준 부모 추적용 stack (node_id, col)
+    stack: List[tuple[str, int]] = []
 
-    # 4. 트리 구성
+    # 같은 부모 내 order 관리
+    order_counter: dict[Optional[str], int] = {}
+
     for box in boxes_sorted:
-        try:
-            qty = parse_qty(box.get("qty"))
-        except Exception:
-            qty = 0
-
-        node = TreeNode(
-            id=box["id"] or str(uuid.uuid4()),
-            name=box["name"],
-            part_no=box["part_no"],
-            material=box["material"],
-            qty=qty,
-        )
-
-        # col 기준 parent 판별
-        while stack and box["col"] <= stack[-1]._col:
+        # parent 결정
+        while stack and box["col"] <= stack[-1][1]:
             stack.pop()
 
-        if stack:
-            stack[-1].children.append(node)
-        else:
-            root.children.append(node)
+        parent_id = stack[-1][0] if stack else None
 
-        # 임시 depth 정보 (저장 안 됨)
-        node._col = box["col"]
-        stack.append(node)
+        order = order_counter.get(parent_id, 0)
+        order_counter[parent_id] = order + 1
+
+        node = SubNode(
+            id=box["id"],
+            parent_id=parent_id,
+            order=order,
+            type="PART",   # 필요하면 ASSY/PART 구분 로직 추가 가능
+            name=box["name"] or "(이름 없음)",
+            part_no=box["part_no"],
+            material=box["material"],
+            qty=parse_qty(box.get("qty")),
+        )
+
+        nodes.append(node)
+        stack.append((node.id, box["col"]))
 
     meta = TreeMeta(
         bom_id=bom_id,
         bom_filename=bom_filename,
         spec_name=spec_name,
-        created_at=datetime.now()
     )
 
-    return SubTree(meta=meta, root=root)
+    return SubTree(
+        meta=meta,
+        nodes=nodes
+    )

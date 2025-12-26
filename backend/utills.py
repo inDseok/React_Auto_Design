@@ -1,5 +1,6 @@
 from pathlib import Path
 from backend.models import SubTree
+import json
 
 def find_node_by_id(node, target_id):
     if node.id == target_id:
@@ -10,11 +11,11 @@ def find_node_by_id(node, target_id):
             return found
     return None
 
-def load_tree_json(root_dir: Path, spec: str) -> SubTree:
+def load_tree_json(root_dir, spec) -> SubTree:
     path = root_dir / f"{spec}.json"
-    if not path.exists():
-        raise FileNotFoundError("트리 JSON 없음")
-    return SubTree.parse_file(path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return SubTree(**data)
+
 
 def save_tree_json(root_dir: Path, spec: str, tree: SubTree):
     path = root_dir / f"{spec}.json"
