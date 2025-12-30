@@ -13,15 +13,19 @@ function DropZone({ parentId, index, onDropNode }) {
         e.currentTarget.classList.remove("active");
         if (typeof onDropNode === "function") {
           onDropNode(parentId, index);
-        } else {
-          console.warn("onDropNode prop이 없습니다.");
         }
       }}
     />
   );
 }
 
-function TreeNode({ node, selectedNodeId, onSelect, onDragStartNode, onDropNode }) {
+function TreeNode({
+  node,
+  selectedNodeId,
+  onSelect,
+  onDragStartNode,
+  onDropNode,
+}) {
   const isSelected = node.id === selectedNodeId;
 
   return (
@@ -30,9 +34,11 @@ function TreeNode({ node, selectedNodeId, onSelect, onDragStartNode, onDropNode 
         <div
           className={`tree-card ${isSelected ? "selected" : ""}`}
           onClick={() => onSelect(node)}
-          draggable
+
+          // ⬇ 선택된 노드만 드래그 가능
+          draggable={isSelected}
           onDragStart={() => {
-            if (typeof onDragStartNode === "function") {
+            if (isSelected && typeof onDragStartNode === "function") {
               onDragStartNode(node.id);
             }
           }}
@@ -51,12 +57,7 @@ function TreeNode({ node, selectedNodeId, onSelect, onDragStartNode, onDropNode 
         <div className="tree-children">
           {node.children.map((child, idx) => (
             <React.Fragment key={child.id}>
-              {/* 형제 사이 DropZone */}
-              <DropZone
-                parentId={node.id}
-                index={idx}
-                onDropNode={onDropNode}
-              />
+              <DropZone parentId={node.id} index={idx} onDropNode={onDropNode} />
 
               <TreeNode
                 node={child}
@@ -68,7 +69,6 @@ function TreeNode({ node, selectedNodeId, onSelect, onDragStartNode, onDropNode 
             </React.Fragment>
           ))}
 
-          {/* 마지막 뒤 DropZone */}
           <DropZone
             parentId={node.id}
             index={node.children.length}

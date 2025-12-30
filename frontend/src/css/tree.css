@@ -27,7 +27,7 @@
 
 /* children 컨테이너 */
 .tree-children {
-  margin-left: 20px;
+  margin-left: 80px;
   position: relative;
 }
 
@@ -63,10 +63,12 @@
 
 .drop-zone {
   height: 8px;
+  margin: 4px 0;
   background: transparent;
   transition: background 0.15s ease;
 }
 
 .drop-zone.active {
   background: #cce4ff;
+  border: 1px dashed #2563eb;
 }

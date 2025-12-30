@@ -143,15 +143,8 @@ export default function SubPage() {
 
   // Drop 핸들러
   async function handleDropNode(parentId, index) {
-    if (!dragNodeId) {
-      console.warn("dragNodeId가 없습니다. 드래그 시작이 제대로 안 된 것 같습니다.");
-      return;
-    }
-
-    if (!state.bomId) {
-      console.warn("bomId가 없습니다.");
-      return;
-    }
+    if (!dragNodeId) return;
+    if (!state.bomId || !state.selectedSpec) return;
 
     try {
       const payload = {
@@ -167,20 +160,17 @@ export default function SubPage() {
         payload
       );
 
-      // 서버에서 전체 tree(or nodes)를 내려준다고 가정
-      if (updatedTree?.nodes && Array.isArray(updatedTree.nodes)) {
+      // 서버에서 nodes 내려준다고 가정
+      if (updatedTree?.nodes) {
         setNodes(updatedTree.nodes);
-      } else {
-        console.warn("updatedTree.nodes 구조가 예상과 다릅니다.", updatedTree);
       }
     } catch (e) {
       console.error("노드 이동 실패:", e);
-      alert("노드 이동에 실패했습니다. 콘솔 로그를 확인하세요.");
+      alert("노드 이동 실패. 콘솔을 확인하세요.");
     } finally {
       setDragNodeId(null);
     }
   }
-
 
   /* =========================
      render

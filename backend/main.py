@@ -286,3 +286,48 @@ def move_node(
     save_tree_json(root_dir, spec, tree)
 
     return tree
+
+@app.delete("/api/bom/{bom_id}/node/{node_id}", response_model=SubTree)
+def delete_node(
+    bom_id: str,
+    node_id: str,
+    request: Request,
+    response: Response,
+):
+    sid = get_or_create_sid(request, response)
+    state = SESSION_STATE.get(sid, {})
+
+    spec = state.get("spec")
+    if not spec:
+        raise HTTPException(status_code=400, detail="spec 없음")
+
+    root_dir = DATA_DIR / "bom_runs" / bom_id
+
+    # 트리 로드
+    tree = load_tree_json(root_dir, spec)
+    nodes = tree.nodes
+
+    # 대상 노드 찾기
+    target = next((n for n in nodes if n.id == node_id), None)
+    if not target:
+        raise HTTPException(status_code=404, detail="노드 없음")
+
+    # 1️⃣ 자기 자신 + 모든 자식 제거 (cascade)
+    def collect_descendants(id):
+        return [n.id for n in nodes if n.parent_id == id]
+
+    to_delete = {node_id}
+    queue = [node_id]
+
+    while queue:
+        cur = queue.pop()
+        children = collect_descendants(cur)
+        to_delete.update(children)
+        queue.extend(children)
+
+    tree.nodes = [n for n in nodes if n.id not in to_delete]
+
+    # 저장
+    save_tree_json(root_dir, spec, tree)
+
+    return tree

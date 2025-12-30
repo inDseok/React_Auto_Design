@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useApp } from "../state/AppContext";
-import { apiPatch } from "../api/client";
+import { apiPatch, apiDelete } from "../api/client";
 
 export default function SelectedPartPanel({  node, onUpdateNodes }) {
   const { state,actions } = useApp();
@@ -31,6 +31,9 @@ export default function SelectedPartPanel({  node, onUpdateNodes }) {
         선택된 부품이 없습니다.
       </div>
     );
+  }
+  function handleDeselect() {
+    actions.setSelectedNode(null);   // ← 선택 해제
   }
 
   function onChange(e) {
@@ -74,6 +77,41 @@ export default function SelectedPartPanel({  node, onUpdateNodes }) {
     }
   }
 
+  async function handleDelete() {
+    if (!node) return;
+    if (!state.bomId || !state.selectedSpec) {
+      setErr("BOM 또는 사양이 없습니다.");
+      return;
+    }
+  
+    const ok = window.confirm("정말 이 부품을 삭제하시겠습니까?");
+    if (!ok) return;
+  
+    setSaving(true);
+    setErr("");
+  
+    try {
+      const deletedTree = await apiDelete(
+        `/api/bom/${encodeURIComponent(state.bomId)}/node/${encodeURIComponent(node.id)}?spec=${encodeURIComponent(state.selectedSpec)}`
+      );
+  
+      // 서버가 최신 nodes를 내려준다고 가정
+      if (deletedTree?.nodes) {
+        onUpdateNodes(deletedTree.nodes);
+      }
+  
+      // 선택 해제
+      actions.setSelectedNode(null);
+  
+      alert("삭제되었습니다.");
+    } catch (e) {
+      console.error(e);
+      setErr(String(e?.message ?? e));
+    } finally {
+      setSaving(false);
+    }
+  }
+  
   return (
     <div
       style={{
@@ -130,6 +168,16 @@ export default function SelectedPartPanel({  node, onUpdateNodes }) {
 
       <button onClick={onSave} disabled={saving}>
         {saving ? "저장 중..." : "저장"}
+      </button>
+              {/* 🔵 선택 해제 버튼 추가 */}
+              <button onClick={handleDeselect}>
+          선택 해제
+      </button>
+      <button
+        onClick={handleDelete}
+        disabled={saving}
+        style={{ color: "crimson" }}>
+        삭제
       </button>
     </div>
   );

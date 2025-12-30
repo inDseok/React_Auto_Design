@@ -55,3 +55,20 @@ export async function apiPatch(path, body) {
 
   return res.json();
 }
+
+export async function apiDelete(url) {
+  const res = await fetch(`${API_BASE}${url}`, {
+    method: "DELETE",
+    credentials: "include",   // ⭐⭐⭐ 이 줄이 핵심
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(t || `DELETE failed: ${res.status}`);
+  }
+
+  return await res.json();
+}
