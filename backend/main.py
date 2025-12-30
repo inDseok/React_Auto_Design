@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pathlib import Path
 
-from backend.models import SubNodePatch, SubTree, MoveNodeRequest
+from backend.models import SubNodePatch, SubTree, MoveNodeRequest, SubNode
 from backend.bom_service import create_bom_run, DATA_DIR
 from backend.utills import find_node_by_id, load_tree_json, save_tree_json
 from backend.excel_loader import build_tree_from_sheet
@@ -219,7 +219,7 @@ def get_tree(
 
 
 
-@app.patch("/api/bom/{bom_id}/node/{node_id}", response_model=SubTree)
+@app.patch("/api/bom/{bom_id}/node/{node_id:path}", response_model=SubTree)
 def patch_node(
     bom_id: str,
     node_id: str,
@@ -237,20 +237,45 @@ def patch_node(
     root_dir = DATA_DIR / "bom_runs" / bom_id
 
     tree = load_tree_json(root_dir, spec)
-    nodes = tree.nodes   # ✅ 핵심 수정
+    nodes = tree.nodes
 
-    # flat 구조에서 노드 찾기
+    # 1️⃣ 기존 id 로 노드 찾기
     target = next((n for n in nodes if n.id == node_id), None)
     if not target:
         raise HTTPException(status_code=404, detail="노드 없음")
 
-    # patch 적용 (Pydantic 객체 기준)
-    for field, value in patch.dict(exclude_unset=True).items():
+    data = patch.dict(exclude_unset=True)
+
+    # ---------------------------
+    # 2️⃣ id 변경 처리 (PK 변경)
+    # ---------------------------
+    if "id" in data and data["id"] and data["id"] != node_id:
+        new_id = data["id"]
+
+        # 같은 부모 밑에 중복 id 방지
+        if any(n.id == new_id and n.parent_id == target.parent_id for n in nodes):
+            raise HTTPException(status_code=400, detail="이미 존재하는 id")
+
+        old_id = target.id
+        target.id = new_id   # PK 변경
+
+        # 3️⃣ 자식노드 parent_id 업데이트
+        for n in nodes:
+            if n.parent_id == old_id:
+                n.parent_id = new_id
+
+    # ---------------------------
+    # 4️⃣ 나머지 필드 적용
+    # ---------------------------
+    for field, value in data.items():
+        if field == "id":
+            continue
         setattr(target, field, value)
 
     save_tree_json(root_dir, spec, tree)
 
     return tree
+
 
 @app.patch("/api/bom/{bom_id}/move-node")
 def move_node(
@@ -287,7 +312,60 @@ def move_node(
 
     return tree
 
-@app.delete("/api/bom/{bom_id}/node/{node_id}", response_model=SubTree)
+@app.post("/api/bom/{bom_id}/node", response_model=SubTree)
+def create_node(
+    bom_id: str,
+    payload: dict,
+    request: Request,
+    response: Response,
+):
+    sid = get_or_create_sid(request, response)
+    state = SESSION_STATE.get(sid, {})
+
+    spec = state.get("spec")
+    if not spec:
+        raise HTTPException(status_code=400, detail="spec 없음")
+
+    root_dir = DATA_DIR / "bom_runs" / bom_id
+    tree = load_tree_json(root_dir, spec)
+
+    nodes = tree.nodes
+
+    parent_id = payload.get("parent_id")  # null이면 루트
+    name = payload.get("name") or "새 부품"
+    part_no = payload.get("part_no") or ""
+    material = payload.get("material") or ""
+    qty = payload.get("qty") or 1
+
+    # ⭐ node_id = 이름 그대로 사용
+    node_id = name
+
+    # ⭐ 같은 부모 아래 이미 같은 id가 있으면 막기 (안전장치)
+    if any(n.id == node_id and n.parent_id == parent_id for n in nodes):
+        raise HTTPException(status_code=400, detail="같은 부모 아래 중복 node_id")
+
+    # ⭐ order = 해당 부모 자식 개수
+    siblings = [n for n in nodes if n.parent_id == parent_id]
+    order = len(siblings)
+
+    new_node = SubNode(
+        id=node_id,
+        parent_id=parent_id,
+        order=order,
+        name=name,
+        part_no=part_no,
+        material=material,
+        qty=qty,
+        type="PART",   # ⭐⭐ 추가
+    )
+
+    nodes.append(new_node)
+
+    save_tree_json(root_dir, spec, tree)
+
+    return tree
+
+@app.delete("/api/bom/{bom_id}/node/{node_id:path}", response_model=SubTree)
 def delete_node(
     bom_id: str,
     node_id: str,

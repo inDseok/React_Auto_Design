@@ -33,7 +33,7 @@ class SubTree(BaseModel):
 class SubNodePatch(BaseModel):
     parent_id: Optional[str] = None
     order: Optional[int] = None
-    name: Optional[str] = None
+    id: Optional[str] = None
     part_no: Optional[str] = None
     material: Optional[str] = None
     qty: Optional[float] = None

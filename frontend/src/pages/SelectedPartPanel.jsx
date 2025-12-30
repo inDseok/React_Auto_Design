@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useApp } from "../state/AppContext";
-import { apiPatch, apiDelete } from "../api/client";
+import { apiPatch, apiDelete, apiPost } from "../api/client";
 
 export default function SelectedPartPanel({  node, onUpdateNodes }) {
   const { state,actions } = useApp();
@@ -17,7 +17,7 @@ export default function SelectedPartPanel({  node, onUpdateNodes }) {
     }
 
     setForm({
-      name: node.name ?? "",
+      id: node.id ?? "",
       part_no: node.part_no ?? "",
       material: node.material ?? "",
       qty: node.qty ?? "",
@@ -52,7 +52,7 @@ export default function SelectedPartPanel({  node, onUpdateNodes }) {
 
     try {
       const payload = {
-        name: form.name || null,
+        id: form.id || null,
         part_no: form.part_no || null,
         material: form.material || null,
         qty:
@@ -68,7 +68,9 @@ export default function SelectedPartPanel({  node, onUpdateNodes }) {
       
       // 🔴 여기서 nodes를 즉시 갱신
       onUpdateNodes(updatedTree.nodes);
-      
+
+      actions.setSelectedNode(form.id);
+
       alert("저장되었습니다.");
     } catch (e) {
       setErr(String(e?.message ?? e));
@@ -77,6 +79,41 @@ export default function SelectedPartPanel({  node, onUpdateNodes }) {
     }
   }
 
+  async function handleAddChild() {
+    if (!state.bomId || !state.selectedSpec) {
+      setErr("BOM 또는 사양이 없습니다.");
+      return;
+    }
+    if (!node) {
+      setErr("선택된 노드가 없습니다.");
+      return;
+    }
+  
+    try {
+      const payload = {
+        parent_id: node.id,
+        id: "새 부품",
+        part_no: "",
+        material: "",
+        qty: 1,
+      };
+  
+      const created = await apiPost(
+        `/api/bom/${encodeURIComponent(state.bomId)}/node`,
+        payload
+      );
+  
+      onUpdateNodes(created.nodes);
+  
+      // 새 노드 선택
+      actions.setSelectedNode("새 부품");
+
+  
+    } catch (e) {
+      setErr(String(e?.message ?? e));
+    }
+  }
+  
   async function handleDelete() {
     if (!node) return;
     if (!state.bomId || !state.selectedSpec) {
@@ -125,8 +162,8 @@ export default function SelectedPartPanel({  node, onUpdateNodes }) {
       <div style={{ marginBottom: 8 }}>
         <label>부품명</label>
         <input
-          name="name"
-          value={form?.name ?? ""}
+          name="id"
+          value={form?.id ?? ""}
           onChange={onChange}
           style={{ width: "100%" }}
         />
@@ -172,6 +209,9 @@ export default function SelectedPartPanel({  node, onUpdateNodes }) {
               {/* 🔵 선택 해제 버튼 추가 */}
               <button onClick={handleDeselect}>
           선택 해제
+      </button>
+      <button onClick={handleAddChild}>
+        하위 부품 추가
       </button>
       <button
         onClick={handleDelete}
