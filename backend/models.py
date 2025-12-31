@@ -1,10 +1,10 @@
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Literal
 from enum import Enum
 
 
 class NodeType(str, Enum):
-    ASSY = "ASSY"
+    SUB = "SUB"
     PART = "PART"
 
 
@@ -12,7 +12,7 @@ class SubNode(BaseModel):
     id: str
     parent_id: Optional[str] = None
     order: int
-    type: NodeType
+    type: NodeType = NodeType.PART
     name: str
     part_no: Optional[str] = None
     material: Optional[str] = None
@@ -37,6 +37,7 @@ class SubNodePatch(BaseModel):
     part_no: Optional[str] = None
     material: Optional[str] = None
     qty: Optional[float] = None
+    type: Optional[NodeType] = None   # ← 추가
 
 class MoveNodeRequest(BaseModel):
     node_id: str

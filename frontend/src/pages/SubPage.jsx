@@ -6,7 +6,9 @@ import UploadBom from "./UploadBom";
 import SpecSelector from "./SpecSelector";
 import TreeView from "./TreeView";
 import SelectedPartPanel from "./SelectedPartPanel";
+import { Layout, Row, Col } from "antd";
 
+const { Content } = Layout;
 /* =========================
    utils
 ========================= */
@@ -94,7 +96,7 @@ export default function SubPage() {
   // tree(nodes) 로드
   useEffect(() => {
     if (!activeBomId || !state.selectedSpec) return;
-    if (hasLoadedRef.current) return;
+    if (hasLoadedRef.current) false;
 
     hasLoadedRef.current = true;
 
@@ -176,14 +178,7 @@ export default function SubPage() {
      render
   ========================= */
   return (
-    <div style={{ padding: 16 }}>
-      <h2>SUB PAGE</h2>
-
-      <div style={{ marginBottom: 12 }}>
-        <div>bomId: {String(state.bomId)}</div>
-        <div>selectedSpec: {String(state.selectedSpec)}</div>
-        <div>selectedNodeId: {String(state.selectedNodeId)}</div>
-      </div>
+    <div style={{ padding: 16, height: "100vh", boxSizing: "border-box" }}>
 
       <UploadBom />
       <SpecSelector />
@@ -199,6 +194,7 @@ export default function SubPage() {
         >
           전체 초기화
         </button>
+
         <Link to="/summary">요약 페이지로 이동</Link>
       </div>
 
@@ -209,19 +205,47 @@ export default function SubPage() {
       {loading && <div>트리 로딩 중...</div>}
       {err && <div style={{ color: "crimson" }}>{err}</div>}
 
+      {/* 🔥 여기부터 하단 스크롤 영역 */}
       {treeRoots.length > 0 && (
-        <>
-          <TreeView
-            tree={treeRoots}
-            selectedNodeId={state.selectedNodeId}
-            onSelect={(node) => actions.setSelectedNode(node.id)}
-            onDragStartNode={handleDragStartNode}
-            onDropNode={handleDropNode}
-          />
-          <SelectedPartPanel node={selectedNode}
-          onUpdateNodes={(newNodes) => setNodes(newNodes)}
-          />
-        </>
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            display: "flex",
+            gap: 12,
+            marginTop: 12,
+            overflow: "hidden",
+            height: "100%",
+          }}
+        >
+          {/* 트리 패널 - 여기서만 스크롤 */}
+          <div
+            style={{
+              flex: 1,
+              minHeight: 0,
+              overflowY: "auto",
+              border: "1px solid #ddd",
+              borderRadius: 8,
+              padding: 8,
+            }}
+          >
+            <TreeView
+              tree={treeRoots}
+              selectedNodeId={state.selectedNodeId}
+              onSelect={(node) => actions.setSelectedNode(node.id)}
+              onDragStartNode={handleDragStartNode}
+              onDropNode={handleDropNode}
+            />
+          </div>
+
+          {/* 오른쪽 패널 */}
+          <div style={{ width: 360 }}>
+            <SelectedPartPanel
+              node={selectedNode}
+              onUpdateNodes={(newNodes) => setNodes(newNodes)}
+            />
+          </div>
+        </div>
       )}
     </div>
   );

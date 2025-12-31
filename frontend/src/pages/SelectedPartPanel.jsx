@@ -2,46 +2,53 @@ import React, { useEffect, useState } from "react";
 import { useApp } from "../state/AppContext";
 import { apiPatch, apiDelete, apiPost } from "../api/client";
 
-export default function SelectedPartPanel({  node, onUpdateNodes }) {
-  const { state,actions } = useApp();
+import {
+  Card,
+  Form,
+  Input,
+  InputNumber,
+  Radio,
+  Button,
+  Space,
+  Alert,
+  Popconfirm,
+  message,
+} from "antd";
 
-  const [form, setForm] = useState(null);
+export default function SelectedPartPanel({ node, onUpdateNodes }) {
+  const { state, actions } = useApp();
+  const [form] = Form.useForm();
+
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
 
-  // 선택 노드 바뀌면 form 초기화
+  // node 변경 시 form 초기화
   useEffect(() => {
     if (!node) {
-      setForm(null);
+      form.resetFields();
       return;
     }
 
-    setForm({
+    form.setFieldsValue({
       id: node.id ?? "",
       part_no: node.part_no ?? "",
       material: node.material ?? "",
       qty: node.qty ?? "",
+      type: node.type ?? "PART",
     });
+
     setErr("");
   }, [node]);
 
   if (!node) {
     return (
-      <div style={{ padding: 12, border: "1px solid #ddd" }}>
+      <Card>
         선택된 부품이 없습니다.
-      </div>
+      </Card>
     );
   }
-  function handleDeselect() {
-    actions.setSelectedNode(null);   // ← 선택 해제
-  }
 
-  function onChange(e) {
-    const { name, value } = e.target;
-    setForm((prev) => ({ ...prev, [name]: value }));
-  }
-
-  async function onSave() {
+  async function onSave(values) {
     if (!state.bomId || !state.selectedSpec) {
       setErr("BOM 또는 사양이 없습니다.");
       return;
@@ -52,26 +59,27 @@ export default function SelectedPartPanel({  node, onUpdateNodes }) {
 
     try {
       const payload = {
-        id: form.id || null,
-        part_no: form.part_no || null,
-        material: form.material || null,
+        id: values.id || null,
+        part_no: values.part_no || null,
+        material: values.material || null,
         qty:
-          form.qty === "" || form.qty === null
+          values.qty === "" || values.qty === null
             ? null
-            : Number(form.qty),
+            : Number(values.qty),
+        type: values.type || "PART",
       };
 
       const updatedTree = await apiPatch(
-        `/api/bom/${encodeURIComponent(state.bomId)}/node/${encodeURIComponent(node.id)}`,
+        `/api/bom/${encodeURIComponent(state.bomId)}/node/${encodeURIComponent(
+          node.id
+        )}`,
         payload
       );
-      
-      // 🔴 여기서 nodes를 즉시 갱신
+
       onUpdateNodes(updatedTree.nodes);
+      actions.setSelectedNode(values.id);
 
-      actions.setSelectedNode(form.id);
-
-      alert("저장되었습니다.");
+      message.success("저장되었습니다.");
     } catch (e) {
       setErr(String(e?.message ?? e));
     } finally {
@@ -84,11 +92,7 @@ export default function SelectedPartPanel({  node, onUpdateNodes }) {
       setErr("BOM 또는 사양이 없습니다.");
       return;
     }
-    if (!node) {
-      setErr("선택된 노드가 없습니다.");
-      return;
-    }
-  
+
     try {
       const payload = {
         parent_id: node.id,
@@ -97,128 +101,110 @@ export default function SelectedPartPanel({  node, onUpdateNodes }) {
         material: "",
         qty: 1,
       };
-  
+
       const created = await apiPost(
         `/api/bom/${encodeURIComponent(state.bomId)}/node`,
         payload
       );
-  
+
       onUpdateNodes(created.nodes);
-  
-      // 새 노드 선택
       actions.setSelectedNode("새 부품");
 
-  
+      message.success("하위 부품이 추가되었습니다.");
     } catch (e) {
       setErr(String(e?.message ?? e));
     }
   }
-  
+
   async function handleDelete() {
-    if (!node) return;
     if (!state.bomId || !state.selectedSpec) {
       setErr("BOM 또는 사양이 없습니다.");
       return;
     }
-  
-    const ok = window.confirm("정말 이 부품을 삭제하시겠습니까?");
-    if (!ok) return;
-  
+
     setSaving(true);
     setErr("");
-  
+
     try {
       const deletedTree = await apiDelete(
-        `/api/bom/${encodeURIComponent(state.bomId)}/node/${encodeURIComponent(node.id)}?spec=${encodeURIComponent(state.selectedSpec)}`
+        `/api/bom/${encodeURIComponent(
+          state.bomId
+        )}/node/${encodeURIComponent(node.id)}?spec=${encodeURIComponent(
+          state.selectedSpec
+        )}`
       );
-  
-      // 서버가 최신 nodes를 내려준다고 가정
+
       if (deletedTree?.nodes) {
         onUpdateNodes(deletedTree.nodes);
       }
-  
-      // 선택 해제
+
       actions.setSelectedNode(null);
-  
-      alert("삭제되었습니다.");
+      message.success("삭제되었습니다.");
     } catch (e) {
-      console.error(e);
       setErr(String(e?.message ?? e));
     } finally {
       setSaving(false);
     }
   }
-  
+
+  function handleDeselect() {
+    actions.setSelectedNode(null);
+  }
+
   return (
-    <div
-      style={{
-        padding: 12,
-        border: "1px solid #ddd",
-        minWidth: 260,
-      }}
-    >
-      <h4>선택된 부품</h4>
-
-      <div style={{ marginBottom: 8 }}>
-        <label>부품명</label>
-        <input
-          name="id"
-          value={form?.id ?? ""}
-          onChange={onChange}
-          style={{ width: "100%" }}
+    <Card title="선택된 부품" style={{ minWidth: 280 }}>
+      {err && (
+        <Alert
+          type="error"
+          message={err}
+          style={{ marginBottom: 12 }}
+          showIcon
         />
-      </div>
+      )}
 
-      <div style={{ marginBottom: 8 }}>
-        <label>품번</label>
-        <input
-          name="part_no"
-          value={form?.part_no ?? ""}
-          onChange={onChange}
-          style={{ width: "100%" }}
-        />
-      </div>
+      <Form layout="vertical" form={form} onFinish={onSave}>
+        <Form.Item name="id" label="부품명">
+          <Input />
+        </Form.Item>
 
-      <div style={{ marginBottom: 8 }}>
-        <label>재질</label>
-        <input
-          name="material"
-          value={form?.material ?? ""}
-          onChange={onChange}
-          style={{ width: "100%" }}
-        />
-      </div>
+        <Form.Item name="part_no" label="품번">
+          <Input />
+        </Form.Item>
 
-      <div style={{ marginBottom: 12 }}>
-        <label>수량</label>
-        <input
-          name="qty"
-          type="number"
-          step="1"
-          value={form?.qty ?? ""}
-          onChange={onChange}
-          style={{ width: "100%" }}
-        />
-      </div>
+        <Form.Item name="material" label="재질">
+          <Input />
+        </Form.Item>
 
-      {err && <div style={{ color: "crimson" }}>{err}</div>}
+        <Form.Item name="qty" label="수량">
+          <InputNumber min={0} style={{ width: "100%" }} />
+        </Form.Item>
 
-      <button onClick={onSave} disabled={saving}>
-        {saving ? "저장 중..." : "저장"}
-      </button>
-              {/* 🔵 선택 해제 버튼 추가 */}
-              <button onClick={handleDeselect}>
-          선택 해제
-      </button>
-      <button onClick={handleAddChild}>
-        하위 부품 추가
-      </button>
-      <button
-        onClick={handleDelete}
-        disabled={saving}
-        style={{ color: "crimson" }}>
-        삭제
-      </button>
-    </div>
+        <Form.Item name="type" label="구분">
+          <Radio.Group>
+            <Radio value="SUB">외주 SUB</Radio>
+            <Radio value="PART">사내 부품</Radio>
+          </Radio.Group>
+        </Form.Item>
+
+        <Space>
+          <Button type="primary" htmlType="submit" loading={saving}>
+            저장
+          </Button>
+
+          <Button onClick={handleDeselect}>선택 해제</Button>
+
+          <Button onClick={handleAddChild}>하위 부품 추가</Button>
+
+          <Popconfirm
+            title="삭제하시겠습니까?"
+            onConfirm={handleDelete}
+            okText="삭제"
+            cancelText="취소"
+          >
+            <Button danger>삭제</Button>
+          </Popconfirm>
+        </Space>
+      </Form>
+    </Card>
   );
 }

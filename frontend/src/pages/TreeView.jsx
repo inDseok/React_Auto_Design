@@ -27,15 +27,18 @@ function TreeNode({
   onDropNode,
 }) {
   const isSelected = node.id === selectedNodeId;
+  const isSub = node.type === "SUB";
 
   return (
     <div className="tree-node">
       <div className="tree-row">
         <div
-          className={`tree-card ${isSelected ? "selected" : ""}`}
+          className={`
+            tree-card 
+            ${isSelected ? "selected" : ""} 
+            ${isSub ? "sub-node" : ""}
+          `}
           onClick={() => onSelect(node)}
-
-          // ⬇ 선택된 노드만 드래그 가능
           draggable={isSelected}
           onDragStart={() => {
             if (isSelected && typeof onDragStartNode === "function") {
@@ -45,6 +48,7 @@ function TreeNode({
         >
           <div className="tree-title">
             부품명: {node.id ?? "(이름 없음)"}
+            {isSub && <span className="sub-badge">  외주</span>}
           </div>
           <div className="tree-meta">
             품번: {node.part_no ?? "-"} / 수량: {node.qty}EA / 재질:
@@ -90,7 +94,7 @@ export default function TreeView({
   if (!Array.isArray(tree)) return null;
 
   return (
-    <div>
+    <div className="tree-panel">
       {tree.map((root) => (
         <TreeNode
           key={root.id}

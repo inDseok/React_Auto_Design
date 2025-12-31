@@ -72,3 +72,35 @@
   background: #cce4ff;
   border: 1px dashed #2563eb;
 }
+
+/* SUB 노드 카드 */
+.tree-card.sub-node {
+  border: 1.5px solid #ff4d4f;
+  background: #fff1f0;
+}
+
+/* 선택 + SUB 일 때 우선순위 */
+.tree-card.selected.sub-node {
+  border: 2px solid #ff7875;
+  background: #ffe2e0;
+}
+
+/* SUB 배지 */
+.sub-badge {
+  color: #ff4d4f;
+  font-weight: 600;
+  margin-left: 6px;
+}
+
+.tree-panel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.tree-scroll {
+  flex: 1;
+  min-height: 0;
+}
+
+

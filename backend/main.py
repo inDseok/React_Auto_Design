@@ -348,6 +348,8 @@ def create_node(
     siblings = [n for n in nodes if n.parent_id == parent_id]
     order = len(siblings)
 
+    node_type = payload.get("type") or "PART"
+
     new_node = SubNode(
         id=node_id,
         parent_id=parent_id,
@@ -356,7 +358,7 @@ def create_node(
         part_no=part_no,
         material=material,
         qty=qty,
-        type="PART",   # ⭐⭐ 추가
+        type=node_type,   # ⭐⭐ 추가
     )
 
     nodes.append(new_node)
