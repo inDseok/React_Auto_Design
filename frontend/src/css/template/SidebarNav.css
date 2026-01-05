@@ -1,0 +1,118 @@
+/* =========================
+   사이드바 기본
+========================= */
+.sidebar {
+  width: var(--sidebar-width);     /* Layout.css와 동기화 */
+  height: 100vh;
+  background: #0f1b33;
+  color: white;
+
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 100;                    /* 메인보다 위 */
+
+  display: flex;
+  flex-direction: column;
+
+  transition: width 0.25s ease, box-shadow 0.25s ease;
+
+  box-shadow:
+    2px 0 6px rgba(0, 0, 0, 0.25),
+    6px 0 20px rgba(0, 0, 0, 0.12);
+}
+
+
+/* =========================
+   닫힌 상태 (Layout 기준)
+========================= */
+.layout.collapsed .sidebar {
+  width: 60px;
+}
+
+
+/* =========================
+   사이드 경계 하이라이트
+========================= */
+.sidebar::after {
+  content: "";
+  position: absolute;
+  right: -1px;
+  top: 0;
+  width: 1px;
+  height: 100%;
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.15),
+    rgba(255, 255, 255, 0.02)
+  );
+}
+
+
+/* hover 시 3D 느낌 */
+.sidebar:hover {
+  box-shadow:
+    4px 0 10px rgba(0, 0, 0, 0.3),
+    10px 0 26px rgba(0, 0, 0, 0.15);
+}
+
+
+/* =========================
+   메뉴 버튼 (☰)
+========================= */
+.menu-btn {
+  padding: 14px;
+  font-size: 22px;
+  cursor: pointer;
+}
+
+
+/* =========================
+   공통 메뉴 스타일
+========================= */
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+
+  padding: 14px 18px;
+  text-decoration: none;
+
+  color: white;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.nav-item:hover {
+  background: #1c2e52;
+  box-shadow: inset 0 0 6px rgba(255, 255, 255, 0.08);
+}
+
+.nav-item.active {
+  background: #2563eb;
+}
+
+
+/* 아이콘 */
+.nav-icon {
+  font-size: 20px;
+}
+
+
+/* 텍스트 */
+.nav-text {
+  white-space: nowrap;
+}
+
+
+/* =========================
+   닫힌 상태에서 텍스트 숨김
+========================= */
+.layout.collapsed .nav-text {
+  display: none;
+}
+
+/* 닫힌 상태에서도 아이콘은 중앙 정렬 */
+.layout.collapsed .nav-item {
+  justify-content: center;
+}

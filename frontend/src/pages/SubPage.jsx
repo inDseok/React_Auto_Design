@@ -2,11 +2,9 @@ import React, { useEffect, useMemo, useState, useRef } from "react";
 import { Link } from "react-router-dom";
 import { useApp } from "../state/AppContext";
 import { apiGet, apiPatch } from "../api/client";
-import UploadBom from "./UploadBom";
-import SpecSelector from "./SpecSelector";
 import TreeView from "./TreeView";
 import SelectedPartPanel from "./SelectedPartPanel";
-import { Layout, Row, Col } from "antd";
+import { Button, Spin, Alert, Card, Row, Col, Space } from "antd";
 
 const { Content } = Layout;
 /* =========================
@@ -55,7 +53,7 @@ function findNodeById(nodes, id) {
 
 export default function SubPage() {
   const { state, actions } = useApp();
-
+  const hasLoadedRef = useRef(false);
   const [nodes, setNodes] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
@@ -63,8 +61,11 @@ export default function SubPage() {
 
   // ⛳ bomId lock
   const fixedBomIdRef = useRef(null);
-  const hasLoadedRef = useRef(false);
 
+  useEffect(() => {
+    actions.setSelectedNode(null);
+  }, [state.selectedSpec]);
+  
   // bomId 고정 / 교체 로직
   useEffect(() => {
     if (!state.bomId) return;
@@ -93,41 +94,51 @@ export default function SubPage() {
 
   const activeBomId = fixedBomIdRef.current;
 
-  // tree(nodes) 로드
+  const reqIdRef = useRef(0);
+
   useEffect(() => {
-    if (!activeBomId || !state.selectedSpec) return;
-    if (hasLoadedRef.current) false;
-
-    hasLoadedRef.current = true;
-
+    if (!state.bomId || !state.selectedSpec) {
+      setNodes(null);
+      return;
+    }
+  
+    const myReqId = ++reqIdRef.current;
+  
     async function loadTree() {
       setLoading(true);
       setErr("");
-
+  
       try {
-        const raw = await apiGet(
-          `/api/bom/${encodeURIComponent(
-            activeBomId
-          )}/tree?spec=${encodeURIComponent(state.selectedSpec)}`
+        const res = await fetch(
+          `http://localhost:8000/api/bom/${state.bomId}/tree?spec=${encodeURIComponent(
+            state.selectedSpec
+          )}`,
+          { credentials: "include" }
         );
-
-        console.log("RAW TREE RESPONSE =", raw);
-
-        if (!raw?.nodes || !Array.isArray(raw.nodes)) {
-          throw new Error("Invalid tree structure");
+  
+        if (!res.ok) {
+          throw new Error(await res.text());
         }
-
-        setNodes(raw.nodes);
+  
+        const data = await res.json();
+  
+        // 🔥 요청 ID가 최신 요청이 아닐 경우 — 응답 버리기
+        if (myReqId !== reqIdRef.current) return;
+  
+        setNodes(data.nodes ?? []);
       } catch (e) {
-        setNodes(null);
+        if (myReqId !== reqIdRef.current) return;
         setErr(String(e?.message ?? e));
       } finally {
-        setLoading(false);
+        if (myReqId === reqIdRef.current) {
+          setLoading(false);
+        }
       }
     }
-
+  
     loadTree();
-  }, [activeBomId, state.selectedSpec]);
+  }, [state.bomId, state.selectedSpec]);
+  
 
   /* ---------------------------------
      선택 노드
@@ -180,29 +191,35 @@ export default function SubPage() {
   return (
     <div style={{ padding: 16, height: "100vh", boxSizing: "border-box" }}>
 
-      <UploadBom />
-      <SpecSelector />
-
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        <button
-          onClick={() => {
-            fixedBomIdRef.current = null;
-            hasLoadedRef.current = false;
-            setNodes(null);
-            actions.resetAll();
-          }}
-        >
-          전체 초기화
-        </button>
+      <Space style={{ marginBottom: 8 }}>
+          <button
+            onClick={() => {
+              fixedBomIdRef.current = null;
+              hasLoadedRef.current = false;
+              setNodes(null);
+              actions.resetAll();
+            }}
+          >
+            전체 초기화
+          </button>
+        </Space>
 
-        <Link to="/summary">요약 페이지로 이동</Link>
       </div>
 
-      {(!state.bomId || !state.selectedSpec) && (
-        <div>사양을 선택하세요.</div>
+      {!state.selectedSpec && (
+        <Alert
+          type="info"
+          message="사양을 선택하세요."
+          showIcon
+        />
       )}
 
-      {loading && <div>트리 로딩 중...</div>}
+
+      <Spin spinning={loading} tip="트리를 불러오는 중입니다...">
+        {/* 아래 카드 포함 */}
+      </Spin>
+
       {err && <div style={{ color: "crimson" }}>{err}</div>}
 
       {/* 🔥 여기부터 하단 스크롤 영역 */}
@@ -229,17 +246,23 @@ export default function SubPage() {
               padding: 8,
             }}
           >
-            <TreeView
-              tree={treeRoots}
-              selectedNodeId={state.selectedNodeId}
-              onSelect={(node) => actions.setSelectedNode(node.id)}
-              onDragStartNode={handleDragStartNode}
-              onDropNode={handleDropNode}
-            />
+            <Spin spinning={loading} tip="트리 불러오는 중...">
+              {treeRoots.length > 0 && (
+                <>
+                  <TreeView
+                    tree={treeRoots}
+                    selectedNodeId={state.selectedNodeId}
+                    onSelect={(node) => actions.setSelectedNode(node.id)}
+                    onDragStartNode={handleDragStartNode}
+                    onDropNode={handleDropNode}
+                  />
+                </>
+              )}
+            </Spin>
           </div>
 
           {/* 오른쪽 패널 */}
-          <div style={{ width: 360 }}>
+          <div style={{ width: 480}}>
             <SelectedPartPanel
               node={selectedNode}
               onUpdateNodes={(newNodes) => setNodes(newNodes)}

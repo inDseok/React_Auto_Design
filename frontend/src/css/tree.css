@@ -103,4 +103,89 @@
   min-height: 0;
 }
 
+.tree-node {
+  position: relative;
+}
+
+.tree-children {
+  margin-left: 40px;
+  padding-left: 16px;
+  position: relative;
+}
+
+/* 왼쪽 세로 라인 */
+.tree-children::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  background: #ccc;
+}
+
+.tree-child {
+  position: relative;
+  padding-left: 16px;
+}
+
+/* ├ 가로선 */
+.tree-child::before {
+  content: "";
+  position: absolute;
+  top: 18px;      /* 카드 높이에 맞춰 조정 */
+  left: -16px;
+  width: 16px;
+  height: 1px;
+  background: #ccc;
+}
+
+/* 마지막 child → └ 로 보이도록, 아래 세로선 지우기 */
+.tree-child:last-child::after {
+  content: "";
+  position: absolute;
+  top: 22px;   /* 카드 중앙 조금 아래부터 */
+  bottom: -4px; /* 살짝 더 내려가게 */
+  left: 0;     /* 세로선과 같은 x 위치 */
+  width: 1px;
+  background: white;  /* 배경색과 동일하게 */
+}
+
+.tree-panel {
+  padding: 8px 6px;
+}
+
+.tree-node {
+  position: relative;
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+}
+
+/* 카드 강조 */
+.tree-card-antd.selected {
+  border: 2px solid #1677ff !important;
+  background: #e6f4ff;
+}
+
+/* 자식 들여쓰기 */
+.tree-children {
+  margin-left: 28px;
+  position: relative;
+}
+
+/* DropZone 디자인 */
+.drop-zone {
+  height: 6px;
+  margin: 2px 0;
+  border-radius: 6px;
+  transition: all .2s;
+}
+
+.drop-zone.active {
+  background: #1677ff;
+  height: 8px;
+}
 

@@ -1,19 +1,27 @@
 import React from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+
 import { AppProvider } from "./state/AppContext";
 
+import Layout from "./template/Layout";
 import SubPage from "./pages/SubPage";
-import SummaryPage from "./pages/SummaryPage";
+import TimePage from "./pages/TimePage";
+import LobPage from "./pages/LobPage";
 
 export default function App() {
   return (
     <AppProvider>
       <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Navigate to="/sub" replace />} />
-          <Route path="/sub" element={<SubPage />} />
-          <Route path="/summary" element={<SummaryPage />} />
-        </Routes>
+
+        <Layout>
+          <Routes>
+            <Route path="/" element={<Navigate to="/sub" replace />} />
+            <Route path="/sub" element={<SubPage />} />
+            <Route path="/time" element={<TimePage />} />
+            <Route path="/lob" element={<LobPage />} />
+          </Routes>
+        </Layout>
+
       </BrowserRouter>
     </AppProvider>
   );

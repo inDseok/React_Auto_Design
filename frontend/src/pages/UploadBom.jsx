@@ -1,6 +1,10 @@
 import React, { useRef, useState } from "react";
 import { useApp } from "../state/AppContext";
 import { apiUpload } from "../api/client";
+import { Upload, Button, Alert, Spin, Typography } from "antd";
+import { UploadOutlined } from "@ant-design/icons";
+
+const { Text } = Typography;
 
 export default function UploadBom() {
   const { actions } = useApp();
@@ -9,14 +13,12 @@ export default function UploadBom() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
 
-  // 🔒 업로드 중복 방지
   const uploadingRef = useRef(false);
 
-  function onSelectFile(e) {
-    const f = e.target.files?.[0];
-    if (!f) return;
+  function beforeUpload(f) {
     setFile(f);
     setErr("");
+    return false; // 자동 업로드 막기
   }
 
   async function onUpload() {
@@ -37,7 +39,6 @@ export default function UploadBom() {
         throw new Error("서버 응답에 bom_id가 없습니다.");
       }
 
-      // ✅ 새 BOM 시작
       actions.setBomContext(data.bom_id);
       actions.setSelectedSpec?.(null);
       actions.setSelectedNode?.(null);
@@ -45,7 +46,6 @@ export default function UploadBom() {
 
       console.log("NEW bomId:", data.bom_id);
 
-      // 업로드 성공 후 파일 초기화
       setFile(null);
     } catch (e) {
       setErr(String(e?.message ?? e));
@@ -57,25 +57,51 @@ export default function UploadBom() {
 
   return (
     <div style={{ marginBottom: 12 }}>
-      <div>
-        <input
-          type="file"
+
+      <Spin spinning={loading} tip="업로드 중...">
+
+        <Upload
+          beforeUpload={beforeUpload}
+          maxCount={1}
           accept=".xls,.xlsx,.xlsm,.xlsb"
-          onChange={onSelectFile}
-          disabled={loading}
-        />
-      </div>
+          showUploadList={{
+            showRemoveIcon: !loading,
+          }}
+          onRemove={() => setFile(null)}
+        >
+          <Button icon={<UploadOutlined />} disabled={loading}>
+            파일 선택
+          </Button>
+        </Upload>
 
-      <button
-        onClick={onUpload}
-        disabled={!file || loading}
-        style={{ marginTop: 8 }}
-      >
-        BOM 업로드
-      </button>
+        {file && (
+          <div style={{ marginTop: 8 }}>
+            <Text type="secondary">
+              선택된 파일: {file.name}
+            </Text>
+          </div>
+        )}
 
-      {loading && <div>업로드 중...</div>}
-      {err && <div style={{ color: "crimson" }}>{err}</div>}
+        <Button
+          type="primary"
+          onClick={onUpload}
+          disabled={!file || loading}
+          style={{ marginTop: 10 }}
+        >
+          BOM 업로드
+        </Button>
+
+        {err && (
+          <Alert
+            type="error"
+            message="업로드 오류"
+            description={err}
+            showIcon
+            style={{ marginTop: 12 }}
+          />
+        )}
+
+      </Spin>
     </div>
   );
 }

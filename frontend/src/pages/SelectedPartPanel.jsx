@@ -38,7 +38,7 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
     });
 
     setErr("");
-  }, [node]);
+  }, [node, form]);
 
   if (!node) {
     return (
@@ -152,7 +152,7 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
   }
 
   return (
-    <Card title="선택된 부품" style={{ minWidth: 280 }}>
+    <Card title="선택된 부품" style={{ minWidth: 260 }}>
       {err && (
         <Alert
           type="error"
@@ -161,49 +161,57 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
           showIcon
         />
       )}
-
+  
       <Form layout="vertical" form={form} onFinish={onSave}>
-        <Form.Item name="id" label="부품명">
-          <Input />
-        </Form.Item>
-
-        <Form.Item name="part_no" label="품번">
-          <Input />
-        </Form.Item>
-
-        <Form.Item name="material" label="재질">
-          <Input />
-        </Form.Item>
-
-        <Form.Item name="qty" label="수량">
-          <InputNumber min={0} style={{ width: "100%" }} />
-        </Form.Item>
-
-        <Form.Item name="type" label="구분">
-          <Radio.Group>
-            <Radio value="SUB">외주 SUB</Radio>
-            <Radio value="PART">사내 부품</Radio>
-          </Radio.Group>
-        </Form.Item>
-
-        <Space>
-          <Button type="primary" htmlType="submit" loading={saving}>
-            저장
-          </Button>
-
-          <Button onClick={handleDeselect}>선택 해제</Button>
-
-          <Button onClick={handleAddChild}>하위 부품 추가</Button>
-
-          <Popconfirm
-            title="삭제하시겠습니까?"
-            onConfirm={handleDelete}
-            okText="삭제"
-            cancelText="취소"
-          >
-            <Button danger>삭제</Button>
-          </Popconfirm>
-        </Space>
+        {!node && (
+          <p>선택된 부품이 없습니다.</p>
+        )}
+  
+        {node && (
+          <>
+            <Form.Item name="id" label="부품명">
+              <Input />
+            </Form.Item>
+  
+            <Form.Item name="part_no" label="품번">
+              <Input />
+            </Form.Item>
+  
+            <Form.Item name="material" label="재질">
+              <Input />
+            </Form.Item>
+  
+            <Form.Item name="qty" label="수량">
+              <InputNumber min={0} style={{ width: "100%" }} />
+            </Form.Item>
+  
+            <Form.Item name="type" label="구분">
+              <Radio.Group>
+                <Radio value="SUB">외주</Radio>
+                <Radio value="PART">사내 부품</Radio>
+              </Radio.Group>
+            </Form.Item>
+  
+            <Space>
+              <Button type="primary" htmlType="submit" loading={saving}>
+                저장
+              </Button>
+  
+              <Button onClick={handleDeselect}>선택 해제</Button>
+  
+              <Button onClick={handleAddChild}>하위 부품 추가</Button>
+  
+              <Popconfirm
+                title="삭제하시겠습니까?"
+                onConfirm={handleDelete}
+                okText="삭제"
+                cancelText="취소"
+              >
+                <Button danger>삭제</Button>
+              </Popconfirm>
+            </Space>
+          </>
+        )}
       </Form>
     </Card>
   );

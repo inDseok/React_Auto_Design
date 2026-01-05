@@ -1,5 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useApp } from "../state/AppContext";
+import { Spin, Radio, Button, Alert, Collapse, Typography } from "antd";
+
+const { Panel } = Collapse;
+const { Text } = Typography;
 
 export default function SpecSelector() {
   const { state, actions } = useApp();
@@ -8,7 +12,6 @@ export default function SpecSelector() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
 
-  // 🔒 요청 순서 보호용
   const reqIdRef = useRef(0);
 
   useEffect(() => {
@@ -30,13 +33,10 @@ export default function SpecSelector() {
           { credentials: "include" }
         );
 
-        if (!res.ok) {
-          throw new Error(await res.text());
-        }
+        if (!res.ok) throw new Error(await res.text());
 
         const data = await res.json();
 
-        // ❗ bomId가 바뀐 뒤 도착한 응답이면 무시
         if (reqId !== reqIdRef.current) return;
 
         setSpecs(data);
@@ -44,9 +44,7 @@ export default function SpecSelector() {
         if (reqId !== reqIdRef.current) return;
         setErr(String(e?.message ?? e));
       } finally {
-        if (reqId === reqIdRef.current) {
-          setLoading(false);
-        }
+        if (reqId === reqIdRef.current) setLoading(false);
       }
     }
 
@@ -59,34 +57,61 @@ export default function SpecSelector() {
   }
 
   if (!state.bomId) {
-    return <div>BOM을 먼저 업로드하세요.</div>;
+    return (
+      <Alert
+        message="BOM을 먼저 업로드하세요."
+        type="info"
+        showIcon
+        style={{ marginBottom: 12 }}
+      />
+    );
   }
 
   return (
-    <div style={{ marginBottom: 12 }}>
-      <h4>사양 선택</h4>
+    <Collapse
+      defaultActiveKey={["1"]}
+      style={{ marginBottom: 12, background: "white" }}
+    >
+      <Panel header="사양 선택" key="1">
+        {err && (
+          <Alert
+            type="error"
+            message="사양 불러오기 실패"
+            description={err}
+            showIcon
+            style={{ marginBottom: 10 }}
+          />
+        )}
 
-      {loading && <div>사양 불러오는 중...</div>}
-      {err && <div style={{ color: "crimson" }}>{err}</div>}
+        <Spin spinning={loading} tip="사양 불러오는 중...">
+          <Radio.Group
+            onChange={(e) => setSelected(e.target.value)}
+            value={selected}
+            style={{ display: "flex", flexDirection: "column", gap: 8 }}
+          >
+            {specs.map((s) => (
+              <Radio key={s} value={s}>
+                {s}
+              </Radio>
+            ))}
+          </Radio.Group>
 
-      {specs.map((s) => (
-        <div key={s}>
-          <label>
-            <input
-              type="radio"
-              name="spec"
-              value={s}
-              checked={selected === s}
-              onChange={() => setSelected(s)}
-            />
-            {s}
-          </label>
-        </div>
-      ))}
+          <Button
+            type="primary"
+            onClick={onConfirm}
+            disabled={!selected || loading}
+            style={{ marginTop: 12 }}
+          >
+            사양 확정
+          </Button>
 
-      <button onClick={onConfirm} disabled={!selected}>
-        사양 확정
-      </button>
-    </div>
+          {selected && (
+            <div style={{ marginTop: 6 }}>
+              <Text type="secondary">선택됨: {selected}</Text>
+            </div>
+          )}
+        </Spin>
+      </Panel>
+    </Collapse>
   );
 }
