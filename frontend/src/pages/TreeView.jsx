@@ -55,7 +55,7 @@ function TreeNode({
         >
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <Text strong>
-              부품명: {node.name ?? node.id ?? "(이름 없음)"}
+              부품명: {node.id ?? node.id ?? "(이름 없음)"}
             </Text>
 
             {isSub && (

@@ -1,12 +1,11 @@
 import React, { useEffect, useMemo, useState, useRef } from "react";
 import { Link } from "react-router-dom";
 import { useApp } from "../state/AppContext";
-import { apiGet, apiPatch } from "../api/client";
+import { apiGet, apiPatch, apiPost } from "../api/client";
 import TreeView from "./TreeView";
 import SelectedPartPanel from "./SelectedPartPanel";
 import { Button, Spin, Alert, Card, Row, Col, Space } from "antd";
 
-const { Content } = Layout;
 /* =========================
    utils
 ========================= */
@@ -184,7 +183,46 @@ export default function SubPage() {
       setDragNodeId(null);
     }
   }
-
+  async function handleAddRootNode() {
+    if (!state?.bomId || !state?.selectedSpec) {
+      alert("BOM과 사양을 먼저 선택하세요.");
+      return;
+    }
+  
+    try {
+      const roots = nodes?.filter(n => n.parent_id === null) ?? [];
+      const maxOrder = roots.reduce(
+        (m, n) => Math.max(m, n.order ?? 0),
+        0
+      );
+  
+      const body = {
+        id:"",
+        parent_id: null,
+        order: maxOrder + 1,
+        name: "새 루트 노드",
+        part_no: "",
+        qty: 1,
+        material: "",
+        type: "PART"
+      };
+  
+      const created = await apiPost(
+        `/api/bom/${state.bomId}/nodes?spec=${encodeURIComponent(
+          state.selectedSpec
+        )}`,
+        body
+      );
+  
+      // UI에 반영
+      setNodes(prev => [...prev, created]);
+  
+    } catch (e) {
+      alert("노드 추가 실패: " + String(e?.message ?? e));
+    }
+  }
+  
+  
   /* =========================
      render
   ========================= */
@@ -203,8 +241,11 @@ export default function SubPage() {
           >
             전체 초기화
           </button>
+        
+          <button onClick={handleAddRootNode}>
+            추가
+          </button>
         </Space>
-
       </div>
 
       {!state.selectedSpec && (

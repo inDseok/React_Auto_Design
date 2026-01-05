@@ -25,12 +25,6 @@
   border-color: #2563eb;
 }
 
-/* children 컨테이너 */
-.tree-children {
-  margin-left: 80px;
-  position: relative;
-}
-
 /* 각 child */
 .tree-child {
   position: relative;
@@ -133,9 +127,9 @@
 .tree-child::before {
   content: "";
   position: absolute;
-  top: 18px;      /* 카드 높이에 맞춰 조정 */
+  top: 36px;      /* 카드 높이에 맞춰 조정 */
   left: -16px;
-  width: 16px;
+  width: 28px;
   height: 1px;
   background: #ccc;
 }
@@ -144,9 +138,9 @@
 .tree-child:last-child::after {
   content: "";
   position: absolute;
-  top: 22px;   /* 카드 중앙 조금 아래부터 */
+  top: 36px;   /* 카드 중앙 조금 아래부터 */
   bottom: -4px; /* 살짝 더 내려가게 */
-  left: 0;     /* 세로선과 같은 x 위치 */
+  left: -16px;     /* 세로선과 같은 x 위치 */
   width: 1px;
   background: white;  /* 배경색과 동일하게 */
 }
@@ -170,11 +164,6 @@
   background: #e6f4ff;
 }
 
-/* 자식 들여쓰기 */
-.tree-children {
-  margin-left: 28px;
-  position: relative;
-}
 
 /* DropZone 디자인 */
 .drop-zone {

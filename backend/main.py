@@ -218,7 +218,6 @@ def get_tree(
     return tree
 
 
-
 @app.patch("/api/bom/{bom_id}/node/{node_id:path}", response_model=SubTree)
 def patch_node(
     bom_id: str,
@@ -411,3 +410,66 @@ def delete_node(
     save_tree_json(root_dir, spec, tree)
 
     return tree
+
+from uuid import uuid4
+
+@app.post("/api/bom/{bom_id}/nodes", response_model=SubNode)
+def add_node(
+    bom_id: str,
+    body: SubNode,               # ← 그대로 사용
+    request: Request,
+    response: Response,
+):
+    sid = get_or_create_sid(request, response)
+    state = SESSION_STATE.get(sid, {})
+
+    spec = state.get("spec")
+    if not spec:
+        raise HTTPException(status_code=400, detail="spec 없음")
+
+    root_dir = DATA_DIR / "bom_runs" / bom_id
+
+    # 1️⃣ JSON 트리 로드
+    tree = load_tree_json(root_dir, spec)
+    nodes = list(tree.nodes)
+
+    # 2️⃣ 부모가 존재하는지 확인 (root는 None 가능)
+    if body.parent_id is not None:
+        parent_exists = any(n.id == body.parent_id for n in nodes)
+        if not parent_exists:
+            raise HTTPException(status_code=400, detail="부모 노드 없음")
+
+    # 3️⃣ id는 서버에서 항상 새로 생성
+    new_id = "새 부품"
+
+    # 4️⃣ order는 서버에서 자동 계산
+    siblings = [
+        n for n in nodes
+        if n.parent_id == body.parent_id
+    ]
+
+    max_order = max(
+        [n.order for n in siblings],
+        default=-1
+    )
+
+    new_node = SubNode(
+        id=new_id,                         # 🔥 덮어쓰기
+        parent_id=body.parent_id,
+        order=max_order + 1,               # 🔥 덮어쓰기
+        name=body.name,
+        type=body.type,
+        part_no=body.part_no,
+        material=body.material,
+        qty=body.qty,
+    )
+
+    # 5️⃣ 추가
+    nodes.append(new_node)
+
+    # 6️⃣ 저장
+    tree.nodes = nodes
+    save_tree_json(root_dir, spec, tree)
+
+    return new_node
+

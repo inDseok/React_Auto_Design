@@ -92,7 +92,7 @@ def create_bom_run(binary_data: bytes, original_filename: str) -> Dict[str, Any]
         "spec_info": spec_info,
     }
 
-    (root / "meta.json").write_text(
+    (root / "meta_spec.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
