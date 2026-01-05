@@ -331,7 +331,7 @@ def create_node(
     nodes = tree.nodes
 
     parent_id = payload.get("parent_id")  # null이면 루트
-    name = payload.get("name") or "새 부품"
+    name = payload.get("name") or str(uuid4())
     part_no = payload.get("part_no") or ""
     material = payload.get("material") or ""
     qty = payload.get("qty") or 1
@@ -440,7 +440,7 @@ def add_node(
             raise HTTPException(status_code=400, detail="부모 노드 없음")
 
     # 3️⃣ id는 서버에서 항상 새로 생성
-    new_id = "새 부품"
+    new_id = str(uuid4())
 
     # 4️⃣ order는 서버에서 자동 계산
     siblings = [
