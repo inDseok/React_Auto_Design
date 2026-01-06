@@ -252,8 +252,6 @@ def patch_node(
         new_id = data["id"]
 
         # 같은 부모 밑에 중복 id 방지
-        if any(n.id == new_id and n.parent_id == target.parent_id for n in nodes):
-            raise HTTPException(status_code=400, detail="이미 존재하는 id")
 
         old_id = target.id
         target.id = new_id   # PK 변경
@@ -339,9 +337,6 @@ def create_node(
     # ⭐ node_id = 이름 그대로 사용
     node_id = name
 
-    # ⭐ 같은 부모 아래 이미 같은 id가 있으면 막기 (안전장치)
-    if any(n.id == node_id and n.parent_id == parent_id for n in nodes):
-        raise HTTPException(status_code=400, detail="같은 부모 아래 중복 node_id")
 
     # ⭐ order = 해당 부모 자식 개수
     siblings = [n for n in nodes if n.parent_id == parent_id]

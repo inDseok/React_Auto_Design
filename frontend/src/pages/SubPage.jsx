@@ -4,6 +4,8 @@ import { useApp } from "../state/AppContext";
 import { apiGet, apiPatch, apiPost } from "../api/client";
 import TreeView from "./TreeView";
 import SelectedPartPanel from "./SelectedPartPanel";
+import SpecSelector from "./SpecSelector";
+import UploadBom from "./UploadBom";
 import { Button, Spin, Alert, Card, Row, Col, Space } from "antd";
 
 /* =========================
@@ -228,6 +230,14 @@ export default function SubPage() {
   ========================= */
   return (
     <div style={{ padding: 16, height: "100vh", boxSizing: "border-box" }}>
+      
+      <div className="top-left">
+        <UploadBom />
+      </div>
+
+      <div className="spec-panel">
+        <SpecSelector />
+      </div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
       <Space style={{ marginBottom: 8 }}>

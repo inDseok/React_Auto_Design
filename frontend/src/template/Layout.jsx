@@ -20,18 +20,6 @@ export default function Layout({ children }) {
 
       <HeaderBar />
 
-      {/* 🔷 Upload + Spec → 같은 Row */}
-      <div className="top-bar">
-
-        <div className="top-left">
-          <UploadBom />
-        </div>
-
-        <div className="spec-panel">
-          <SpecSelector />
-        </div>
-
-      </div>
 
       <main>
         {children}

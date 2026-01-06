@@ -178,3 +178,16 @@
   height: 8px;
 }
 
+/* 왼쪽 Upload 영역 */
+.top-left {
+  flex: 1;
+}
+
+.spec-panel {
+  position: fixed;
+  top: 80px;      /* Header 아래 */
+  right: 20px;    /* 오른쪽 여백 */
+  width: 320px;
+
+  z-index: 1000;  /* 트리 위로 올라오게 */
+}
