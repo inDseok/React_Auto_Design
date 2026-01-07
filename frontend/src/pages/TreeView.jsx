@@ -70,6 +70,12 @@ function TreeNode({
                 외주
               </Tag>
             )}
+              
+              {node.inhouse === true && (
+                <Tag color="blue" style={{ fontWeight: 700 }}>
+                  사내 조립
+                </Tag>
+              )}
           </div>
 
           <div>

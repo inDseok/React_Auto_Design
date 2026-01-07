@@ -353,6 +353,7 @@ def create_node(
         material=material,
         qty=qty,
         type=node_type,   # ⭐⭐ 추가
+        inhouse=False
     )
 
     nodes.append(new_node)
@@ -457,6 +458,7 @@ def add_node(
         part_no=body.part_no,
         material=body.material,
         qty=body.qty,
+        inhouse = body.inhouse if body.inhouse is not None else False
     )
 
     # 5️⃣ 추가

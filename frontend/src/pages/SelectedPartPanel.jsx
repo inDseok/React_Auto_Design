@@ -13,6 +13,7 @@ import {
   Alert,
   Popconfirm,
   message,
+  Checkbox,
 } from "antd";
 
 export default function SelectedPartPanel({ node, onUpdateNodes }) {
@@ -35,6 +36,7 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
       material: node.material ?? "",
       qty: node.qty ?? "",
       type: node.type ?? "PART",
+      inhouse: node.inhouse ?? false  
     });
 
     setErr("");
@@ -67,6 +69,7 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
             ? null
             : Number(values.qty),
         type: values.type || "PART",
+        inhouse: values.inhouse ?? false
       };
 
       const updatedTree = await apiPatch(
@@ -100,6 +103,7 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
         part_no: "",
         material: "",
         qty: 1,
+        inhouse: false 
       };
 
       const created = await apiPost(
@@ -191,7 +195,14 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
                 <Radio value="PART">사내 부품</Radio>
               </Radio.Group>
             </Form.Item>
-  
+
+            <Form.Item
+              name="inhouse"
+              valuePropName="checked"
+            >
+              <Checkbox>사내 조립</Checkbox>
+            </Form.Item>
+
             <Space>
               <Button type="primary" htmlType="submit" loading={saving}>
                 저장

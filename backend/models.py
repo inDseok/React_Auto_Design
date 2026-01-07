@@ -17,6 +17,7 @@ class SubNode(BaseModel):
     part_no: Optional[str] = None
     material: Optional[str] = None
     qty: Optional[float] = None
+    inhouse: Optional[bool] = False
 
 
 class TreeMeta(BaseModel):
@@ -38,6 +39,7 @@ class SubNodePatch(BaseModel):
     material: Optional[str] = None
     qty: Optional[float] = None
     type: Optional[NodeType] = None   # ← 추가
+    inhouse: Optional[bool] = None
 
 class MoveNodeRequest(BaseModel):
     node_id: str

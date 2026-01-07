@@ -206,7 +206,8 @@ export default function SubPage() {
         part_no: "",
         qty: 1,
         material: "",
-        type: "PART"
+        type: "PART",
+        inhouse: false
       };
   
       const created = await apiPost(
@@ -300,6 +301,24 @@ export default function SubPage() {
             <Spin spinning={loading} tip="트리 불러오는 중...">
               {treeRoots.length > 0 && (
                 <>
+                {state.selectedSpec && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: 8,
+                        right: 8,
+                        background: "#ffffff",
+                        border: "1px solid #e5e7eb",
+                        borderRadius: 8,
+                        padding: "6px 10px",
+                        fontWeight: 600,
+                        boxShadow: "0 2px 6px rgba(0,0,0,0.05)",
+                        zIndex: 10
+                      }}
+                    >
+                      현재 사양: {state.selectedSpec}
+                    </div>
+                  )}
                   <TreeView
                     tree={treeRoots}
                     selectedNodeId={state.selectedNodeId}

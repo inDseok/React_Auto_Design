@@ -1,6 +1,6 @@
 import React from "react";
 import { Link, useLocation } from "react-router-dom";
-import { FaBars, FaCogs, FaClock, FaProjectDiagram } from "react-icons/fa";
+import { FaBars, FaCalculator, FaCogs, FaClock, FaProjectDiagram } from "react-icons/fa";
 import "../css/template/SidebarNav.css";
 
 export default function SidebarNav({ collapsed, setCollapsed }) {
@@ -26,6 +26,15 @@ export default function SidebarNav({ collapsed, setCollapsed }) {
         <span className="nav-text">서브 부품 구성도</span>
       </Link>
 
+      
+      <Link
+        to="/total"
+        className={`nav-item ${location.pathname === "/total" ? "active" : ""}`}
+      >
+        <FaCalculator className="nav-icon" />
+        <span className="nav-text">조립 총공수</span>
+      </Link>
+      
       <Link
         to="/time"
         className={`nav-item ${location.pathname === "/time" ? "active" : ""}`}
