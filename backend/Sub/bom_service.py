@@ -9,7 +9,7 @@ from pathlib import Path
 from backend.Sub.bom_loader import extract_specs_from_bom
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data" / "bom_runs"
+DATA_DIR = Path(__file__).resolve().parents[1] / "data/bom_runs"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 PYTHON_EXE = r"C:\Users\USER\AppData\Local\Programs\Python\Python39\python.exe"

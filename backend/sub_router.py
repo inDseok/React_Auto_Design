@@ -14,17 +14,18 @@ from fastapi.responses import FileResponse
 
 from pathlib import Path
 
+from backend.Sub.models import NodeType
 from backend.Sub.models import SubNodePatch, SubTree, MoveNodeRequest, SubNode
-from backend.Sub.bom_service import create_bom_run, DATA_DIR
+from backend.Sub.bom_service import create_bom_run
 from backend.Sub.utills import find_node_by_id, load_tree_json, save_tree_json, read_bom_meta,load_session_state,save_session_state
 from backend.Sub.excel_loader import build_tree_from_sheet
 from typing import Optional
 from openpyxl import load_workbook
 
 from backend.Sub.json_to_excel import export_tree_excel_from_json
+from pathlib import Path
 
-DATA_DIR = Path("backend/data")
-
+DATA_DIR = Path(__file__).resolve().parents[1] /"backend"/ "data"
 sub_router = APIRouter(prefix="/sub", tags=["SUB API"])
 
 
@@ -112,7 +113,7 @@ def get_tree(
         tree_excel = root_dir / "tree.xlsx"
         if not tree_excel.exists():
             raise HTTPException(status_code=404, detail="tree.xlsx 파일이 없습니다.")
-
+        
         bom_meta = read_bom_meta(root_dir)
         bom_filename = bom_meta.get("bom_filename")
         if not bom_filename:
@@ -143,6 +144,19 @@ def get_tree(
 
     return tree
 
+def collect_descendants(nodes, parent_name: str):
+    result = []
+    queue = [parent_name]
+
+    while queue:
+        cur = queue.pop(0)
+        children = [n for n in nodes if n.parent_name == cur]
+        for child in children:
+            result.append(child)
+            queue.append(child.name)
+
+    return result
+
 
 @sub_router.patch("/bom/{bom_id}/node/{node_id:path}", response_model=SubTree)
 def patch_node(
@@ -171,6 +185,13 @@ def patch_node(
 
     data = patch.dict(exclude_unset=True)
 
+    # SUB 전파 여부 판단
+    propagate_sub = False
+    if "type" in data:
+        if target.type != NodeType.SUB and data["type"] == NodeType.SUB:
+            propagate_sub = True
+
+
     # ---------------------------
     # 2️⃣ id 변경 처리 (PK 변경)
     # ---------------------------
@@ -194,6 +215,11 @@ def patch_node(
         if field == "id":
             continue
         setattr(target, field, value)
+    # 🔥 자식까지 SUB 전파
+    if propagate_sub:
+        descendants = collect_descendants(nodes, target.name)
+        for child in descendants:
+            child.type = NodeType.SUB
 
     save_tree_json(root_dir, spec, tree)
 
@@ -241,6 +267,10 @@ def move_node(
     # 4️⃣ 부모 name + order 변경
     target.parent_name = parent_name
     target.order = req.new_index or 0
+    if parent_name is not None:
+        parent = next(n for n in nodes if n.name == parent_name)
+        if parent.type == NodeType.SUB:
+            target.type = NodeType.SUB
 
     # 5️⃣ 새로운 부모 아래 형제 목록 수집
     siblings = [n for n in nodes if n.parent_name == parent_name and n.id != target.id]
@@ -306,6 +336,11 @@ def create_node(
     part_no   = payload.get("part_no")  or ""
     material  = payload.get("material") or ""
     qty       = payload.get("qty")      or 1
+    if parent_name is not None:
+        parent = next(n for n in nodes if n.name == parent_name)
+        if parent.type == NodeType.SUB:
+            node_type = NodeType.SUB
+
     node_type = payload.get("type")     or "PART"
 
     # 4️⃣ 내부 PK

@@ -6,7 +6,7 @@ import os
 
 
 # json_경로 = r"C:\Users\USER\Desktop\공정설계 자동화\app\sub_files\JSON 자식, 레벨 삭제\HL_STD_LHD_LD_parent.json"
-json_경로 = r"C:\공정설계 자동화_v2\backend\data\bom_runs\c5ebe776-f209-40b8-bc87-fcd12cd2df03\HL_STD_LHD_LD.json"
+json_경로 = r"C:\Users\USER\Desktop\HL_STD_LHD_LD 3.json"
 결과파일 = r"C:\Users\USER\Desktop\서브단위 부품구성도.xlsx"
 
 
@@ -108,6 +108,7 @@ def 신규JSON_부모참조형_변환(raw_json: dict) -> dict:
 
     for idx, node in enumerate(nodes, start=1):
         결과.append({
+            "type" : node["type"],
             "행번호": idx,
             "품명": node["id"],                 # 표시용
             "노드ID": node["name"],              # 관계용 (고유)
@@ -135,6 +136,7 @@ def 부모참조형_JSON_트리변환(bom_json: dict) -> dict:
         for 항목 in 항목목록:
             노드 = {
                 "행번호": 항목["행번호"],
+                "type" : 항목["type"],
                 "노드ID": 항목["노드ID"],      # 🔑 관계용
                 "품명": 항목["품명"],          # 표시용
                 "품번": 항목["품번"],
@@ -176,7 +178,7 @@ def 부모참조형_JSON_트리변환(bom_json: dict) -> dict:
 # -------------------------------------------------------
 # 📌 양식 박스를 그리는 함수
 # -------------------------------------------------------
-def 양식박스_그리기(ws, 시작행, 시작열, 품명, 품번, 수량, 재질):
+def 양식박스_그리기(ws, 시작행, 시작열, 품명, 품번, 수량, 재질, type):
     """
     ws(워크시트)에 하나의 부품 박스를 생성함.
     박스 구성:
@@ -414,11 +416,13 @@ def 양식박스_그리기(ws, 시작행, 시작열, 품명, 품번, 수량, 재
     m_end_row = r + 전체박스_세로 - 1      # 총 8행 높이
     m_end_column = c + 전체박스_가로 - 1   # 총 12열 폭
 
+    사용_테두리 = 빨간_두꺼운선 if type == "SUB" else 두꺼운선
+
     # 5-1) ★ 위쪽 라인
     for cc in range(m_start_column, m_end_column + 1):
         cell = ws.cell(m_start_row, cc)
         cell.border = Border(
-            top=두꺼운선,
+            top=사용_테두리,
             left=cell.border.left,
             right=cell.border.right,
             bottom=cell.border.bottom
@@ -428,7 +432,7 @@ def 양식박스_그리기(ws, 시작행, 시작열, 품명, 품번, 수량, 재
     for cc in range(m_start_column, m_end_column + 1):
         cell = ws.cell(m_end_row, cc)
         cell.border = Border(
-            bottom=두꺼운선,
+            bottom=사용_테두리,
             left=cell.border.left,
             right=cell.border.right,
             top=cell.border.top
@@ -438,7 +442,7 @@ def 양식박스_그리기(ws, 시작행, 시작열, 품명, 품번, 수량, 재
     for rr in range(m_start_row, m_end_row + 1):
         cell = ws.cell(rr, m_start_column)
         cell.border = Border(
-            left=두꺼운선,
+            left=사용_테두리,
             top=cell.border.top,
             bottom=cell.border.bottom,
             right=cell.border.right
@@ -448,7 +452,7 @@ def 양식박스_그리기(ws, 시작행, 시작열, 품명, 품번, 수량, 재
     for rr in range(m_start_row, m_end_row + 1):
         cell = ws.cell(rr, m_end_column)
         cell.border = Border(
-            right=두꺼운선,
+            right=사용_테두리,
             top=cell.border.top,
             bottom=cell.border.bottom,
             left=cell.border.left
@@ -509,7 +513,8 @@ def 트리_도식화(ws, 트리, 시작행, 시작열):
             품명=노드["품명"],
             품번=노드["품번"],
             수량=노드["수량"],
-            재질=노드["재질"]
+            재질=노드["재질"],
+            type=노드["type"]
         )
 
         # -------------------------------
@@ -767,7 +772,7 @@ def export_tree_excel_from_json(raw_json: dict, output_path: str):
     # 공용 변수들 (지금 코드 그대로 유지)
     global 전체박스_가로, 전체박스_세로
     global 레벨_이동칸, 박스_높이
-    global 두꺼운선, 얇은선, 테두리, 두꺼운테두리
+    global 두꺼운선, 얇은선, 테두리, 두꺼운테두리,빨간_두꺼운선
     global 가운데정렬, 회색채움
 
     전체박스_가로 = 12
@@ -776,6 +781,7 @@ def export_tree_excel_from_json(raw_json: dict, output_path: str):
     박스_높이 = 5
 
     두꺼운선 = Side(border_style="thick", color="000000")
+    빨간_두꺼운선 = Side(style="thick", color="FF0000")
     얇은선 = Side(border_style="thin", color="000000")
     테두리 = Border(left=얇은선, right=얇은선, top=얇은선, bottom=얇은선)
     두꺼운테두리 = Border(left=두꺼운선, right=두꺼운선,
