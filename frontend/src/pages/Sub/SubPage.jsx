@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState, useRef } from "react";
 import { Link } from "react-router-dom";
-import { useApp } from "../state/AppContext";
-import { apiGet, apiPatch, apiPost } from "../api/client";
+import { useApp } from "../../state/AppContext";
+import { apiGet, apiPatch, apiPost } from "../../api/client";
 import TreeView from "./TreeView";
 import SelectedPartPanel from "./SelectedPartPanel";
 import SpecSelector from "./SpecSelector";
@@ -12,40 +12,47 @@ import { Button, Spin, Alert, Card, Row, Col, Space } from "antd";
    utils
 ========================= */
 
-// flat nodes → tree (렌더링 전용)
 function buildTree(nodes) {
   if (!Array.isArray(nodes)) return [];
 
   const map = new Map();
   const roots = [];
 
+  // 1) name 기준으로 node map 구성
   nodes.forEach((n) => {
-    map.set(n.id, { ...n, children: [] });
+    const key = n.name;     // ⭐ UI name이 key
+    map.set(key, { ...n, children: [] });
   });
 
+  // 2) parent_name 기준으로 부모 연결
   map.forEach((node) => {
-    if (node.parent_id === null) {
+    if (!node.parent_name) {
+      // 부모 없으면 root
       roots.push(node);
+      return;
+    }
+
+    const parent = map.get(node.parent_name);
+
+    if (parent) {
+      parent.children.push(node);
     } else {
-      const parent = map.get(node.parent_id);
-      parent ? parent.children.push(node) : roots.push(node);
+      // 부모 못 찾으면 root 취급
+      roots.push(node);
     }
   });
 
+  // 3) order 기준 정렬
   const sortRecursively = (list) => {
     list.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     list.forEach((n) => sortRecursively(n.children));
   };
 
   sortRecursively(roots);
+
   return roots;
 }
 
-// flat nodes에서 단일 노드 찾기
-function findNodeById(nodes, id) {
-  if (!Array.isArray(nodes) || !id) return null;
-  return nodes.find((n) => n.id === id) ?? null;
-}
 
 
 /* =========================
@@ -111,7 +118,7 @@ export default function SubPage() {
   
       try {
         const res = await fetch(
-          `http://localhost:8000/api/bom/${state.bomId}/tree?spec=${encodeURIComponent(
+          `http://localhost:8000/api/sub/bom/${state.bomId}/tree?spec=${encodeURIComponent(
             state.selectedSpec
           )}`,
           { credentials: "include" }
@@ -145,8 +152,9 @@ export default function SubPage() {
      선택 노드
   --------------------------------- */
   const selectedNode = useMemo(() => {
-    return findNodeById(nodes, state.selectedNodeId);
+    return nodes?.find(n => n.name === state.selectedNodeId) ?? null;
   }, [nodes, state.selectedNodeId]);
+  
 
   const treeRoots = useMemo(() => buildTree(nodes), [nodes]);
 
@@ -163,12 +171,12 @@ export default function SubPage() {
     try {
       const payload = {
         node_id: dragNodeId,
-        new_parent_id: parentId,
+        new_parent_name: parentId,
         new_index: index,
       };
 
       const updatedTree = await apiPatch(
-        `/api/bom/${state.bomId}/move-node?spec=${encodeURIComponent(
+        `/api/sub/bom/${state.bomId}/move-node?spec=${encodeURIComponent(
           state.selectedSpec
         )}`,
         payload
@@ -192,7 +200,7 @@ export default function SubPage() {
     }
   
     try {
-      const roots = nodes?.filter(n => n.parent_id === null) ?? [];
+      const roots = nodes?.filter(n => n.parent_name === null) ?? [];
       const maxOrder = roots.reduce(
         (m, n) => Math.max(m, n.order ?? 0),
         0
@@ -200,7 +208,7 @@ export default function SubPage() {
   
       const body = {
         id:"",
-        parent_id: null,
+        parent_name: null,
         order: maxOrder + 1,
         name: "새 루트 노드",
         part_no: "",
@@ -211,7 +219,7 @@ export default function SubPage() {
       };
   
       const created = await apiPost(
-        `/api/bom/${state.bomId}/nodes?spec=${encodeURIComponent(
+        `/api/sub/bom/${state.bomId}/nodes?spec=${encodeURIComponent(
           state.selectedSpec
         )}`,
         body
@@ -225,6 +233,44 @@ export default function SubPage() {
     }
   }
   
+  async function handleDownloadExcel() {
+    if (!state?.bomId || !state?.selectedSpec) {
+      alert("BOM과 사양을 먼저 선택하세요.");
+      return;
+    }
+  
+    try {
+      const url = `http://localhost:8000/api/sub/bom/${state.bomId}/export_excel?spec=${encodeURIComponent(
+        state.selectedSpec
+      )}`;
+  
+      const res = await fetch(url, {
+        method: "GET",
+        credentials: "include",
+      });
+  
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+  
+      const blob = await res.blob();
+      
+      const today = new Date();
+      const yyyy = today.getFullYear();
+      const mm = String(today.getMonth() + 1).padStart(2, "0");
+      const dd = String(today.getDate()).padStart(2, "0");
+      const yyyymmdd = `${yyyy}${mm}${dd}`;
+
+      const a = document.createElement("a");
+      a.href = window.URL.createObjectURL(blob);
+      a.download = `${state.selectedSpec}_서브 부품 구성도_${yyyymmdd}.xlsx`;
+      a.click();
+      a.remove();
+  
+    } catch (e) {
+      alert("엑셀 다운로드 실패: " + String(e?.message ?? e));
+    }
+  }
   
   /* =========================
      render
@@ -255,6 +301,10 @@ export default function SubPage() {
         
           <button onClick={handleAddRootNode}>
             추가
+          </button>
+
+          <button onClick={handleDownloadExcel}>
+            엑셀 다운로드
           </button>
         </Space>
       </div>
@@ -322,7 +372,7 @@ export default function SubPage() {
                   <TreeView
                     tree={treeRoots}
                     selectedNodeId={state.selectedNodeId}
-                    onSelect={(node) => actions.setSelectedNode(node.id)}
+                    onSelect={(node) => actions.setSelectedNode(node.name)}
                     onDragStartNode={handleDragStartNode}
                     onDropNode={handleDropNode}
                   />

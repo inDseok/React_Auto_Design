@@ -4,7 +4,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AppProvider } from "./state/AppContext";
 
 import Layout from "./template/Layout";
-import SubPage from "./pages/SubPage";
+import SubPage from "./pages/Sub/SubPage";
 import TimePage from "./pages/TimePage";
 import LobPage from "./pages/LobPage";
 import Total from "./pages/Total";

@@ -10,7 +10,7 @@ class NodeType(str, Enum):
 
 class SubNode(BaseModel):
     id: str
-    parent_id: Optional[str] = None
+    parent_name: Optional[str] = None
     order: int
     type: NodeType = NodeType.PART
     name: str
@@ -32,7 +32,7 @@ class SubTree(BaseModel):
 
 
 class SubNodePatch(BaseModel):
-    parent_id: Optional[str] = None
+    parent_name: Optional[str] = None
     order: Optional[int] = None
     id: Optional[str] = None
     part_no: Optional[str] = None
@@ -43,5 +43,5 @@ class SubNodePatch(BaseModel):
 
 class MoveNodeRequest(BaseModel):
     node_id: str
-    new_parent_id: Optional[str] = None   # root도 허용
+    new_parent_name: Optional[str] = None   # root도 허용
     new_index: int

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { useApp } from "../state/AppContext";
-import { apiPatch, apiDelete, apiPost } from "../api/client";
+import { useApp } from "../../state/AppContext";
+import { apiPatch, apiDelete, apiPost } from "../../api/client";
 
 import {
   Card,
@@ -71,9 +71,9 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
         type: values.type || "PART",
         inhouse: values.inhouse ?? false
       };
-
+      
       const updatedTree = await apiPatch(
-        `/api/bom/${encodeURIComponent(state.bomId)}/node/${encodeURIComponent(
+        `/api/sub/bom/${encodeURIComponent(state.bomId)}/node/${encodeURIComponent(
           node.id
         )}`,
         payload
@@ -98,7 +98,7 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
 
     try {
       const payload = {
-        parent_id: node.id,
+        parent_name: node.id,
         id: "새 부품",
         part_no: "",
         material: "",
@@ -107,7 +107,7 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
       };
 
       const created = await apiPost(
-        `/api/bom/${encodeURIComponent(state.bomId)}/node`,
+        `/api/sub/bom/${encodeURIComponent(state.bomId)}/node`,
         payload
       );
 
@@ -131,9 +131,9 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
 
     try {
       const deletedTree = await apiDelete(
-        `/api/bom/${encodeURIComponent(
+        `/api/sub/bom/${encodeURIComponent(
           state.bomId
-        )}/node/${encodeURIComponent(node.id)}?spec=${encodeURIComponent(
+        )}/node/${encodeURIComponent(node.name)}?spec=${encodeURIComponent(
           state.selectedSpec
         )}`
       );

@@ -5,7 +5,7 @@ import uuid
 import openpyxl
 from openpyxl.utils import get_column_letter
 
-from backend.models import SubTree, SubNode, TreeMeta
+from backend.Sub.models import SubTree, SubNode, TreeMeta
 
 import re
 
@@ -156,35 +156,43 @@ def build_tree_from_sheet(
 
     nodes: List[SubNode] = []
 
-    # col 기준 부모 추적용 stack (node_id, col)
+    # ⭐ col 기준 부모 추적 스택 ( parent_ui_name , col )
     stack: List[tuple[str, int]] = []
 
     # 같은 부모 내 order 관리
     order_counter: dict[Optional[str], int] = {}
 
     for box in boxes_sorted:
-        # parent 결정
+
+        # 이 노드의 UI name ( spec:row:col )
+        ui_name = f"{spec_name}:{box['row']}:{box['col']}"
+
+        # 현재 box보다 col이 크거나 같은 애들은 부모가 될 수 없음
         while stack and box["col"] <= stack[-1][1]:
             stack.pop()
 
-        parent_id = stack[-1][0] if stack else None
+        # ⭐ 부모 ui_name 얻기
+        parent_ui_name = stack[-1][0] if stack else None
 
-        order = order_counter.get(parent_id, 0)
-        order_counter[parent_id] = order + 1
+        order = order_counter.get(parent_ui_name, 0)
+        order_counter[parent_ui_name] = order + 1
 
         node = SubNode(
-            id=box["id"],
-            parent_id=parent_id,
+            id=box["id"],                  # 내부 DB PK (유지)
+            name=ui_name,                  # UI name
+            parent_name=parent_ui_name,    # ⭐ 부모 UI name
             order=order,
-            type="PART",   # 필요하면 ASSY/PART 구분 로직 추가 가능
-            name=box["name"] or "(이름 없음)",
+            type="PART",
             part_no=box["part_no"],
             material=box["material"],
             qty=parse_qty(box.get("qty")),
+            inhouse=False,
         )
 
         nodes.append(node)
-        stack.append((node.id, box["col"]))
+
+        # ⭐ 현재 노드를 스택에 push
+        stack.append((ui_name, box["col"]))
 
     meta = TreeMeta(
         bom_id=bom_id,
@@ -196,3 +204,4 @@ def build_tree_from_sheet(
         meta=meta,
         nodes=nodes
     )
+

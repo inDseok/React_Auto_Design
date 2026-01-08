@@ -1,6 +1,6 @@
 import React from "react";
 import { Card, Tag, Typography } from "antd";
-import "../css/tree.css";
+import "../../css/tree.css";
 
 const { Text } = Typography;
 
@@ -29,7 +29,7 @@ function TreeNode({
   onDragStartNode,
   onDropNode,
 }) {
-  const isSelected = node.id === selectedNodeId;
+  const isSelected = node.name === selectedNodeId;
   const isSub = node.type === "SUB";
   const hasChildren = Array.isArray(node.children) && node.children.length > 0;
 
@@ -137,7 +137,7 @@ export default function TreeView({
     <div className="tree-panel">
       {tree.map((root) => (
         <TreeNode
-          key={root.id}
+          key={root.name}
           node={root}
           selectedNodeId={selectedNodeId}
           onSelect={onSelect}

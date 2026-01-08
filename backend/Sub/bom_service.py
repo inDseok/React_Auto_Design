@@ -6,7 +6,7 @@ from uuid import uuid4
 from typing import Dict, Any
 from pathlib import Path
 
-from backend.bom_loader import extract_specs_from_bom
+from backend.Sub.bom_loader import extract_specs_from_bom
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data" / "bom_runs"

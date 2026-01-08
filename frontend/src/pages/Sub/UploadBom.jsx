@@ -1,6 +1,6 @@
 import React, { useRef, useState } from "react";
-import { useApp } from "../state/AppContext";
-import { apiUpload } from "../api/client";
+import { useApp } from "../../state/AppContext";
+import { apiUpload } from "../../api/client";
 import { Upload, Button, Alert, Spin, Typography } from "antd";
 import { UploadOutlined } from "@ant-design/icons";
 
@@ -33,7 +33,7 @@ export default function UploadBom() {
       const formData = new FormData();
       formData.append("file", file);
 
-      const data = await apiUpload("/api/bom/upload", formData);
+      const data = await apiUpload("/api/sub/bom/upload", formData);
 
       if (!data?.bom_id) {
         throw new Error("서버 응답에 bom_id가 없습니다.");

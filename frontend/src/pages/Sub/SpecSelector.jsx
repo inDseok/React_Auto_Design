@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { useApp } from "../state/AppContext";
+import { useApp } from "../../state/AppContext";
 import { Spin, Radio, Button, Alert, Collapse, Typography } from "antd";
 
 const { Panel } = Collapse;
@@ -29,7 +29,7 @@ export default function SpecSelector() {
 
       try {
         const res = await fetch(
-          `http://localhost:8000/api/bom/${state.bomId}/specs`,
+          `http://localhost:8000/api/sub/bom/${state.bomId}/specs`,
           { credentials: "include" }
         );
 
