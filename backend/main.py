@@ -16,17 +16,19 @@ from pathlib import Path
 from backend.Sub.utills import load_session_state, save_session_state
 from backend.Sub.bom_service import create_bom_run, DATA_DIR
 from backend.sub_router import sub_router
+from backend.Assembly_router import router as assembly_router
 
 app = FastAPI()
 
 app.include_router(sub_router, prefix="/api")
+app.include_router(assembly_router, prefix="/api")
 
 templates = Jinja2Templates(directory="frontend/template")
 app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:5173"],  # 프론트 주소
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -39,6 +41,7 @@ SESSION_STORE_PATH = DATA_DIR / "session_state.json"
 SESSION_STATE: Dict[str, Dict[str, Optional[str]]] = load_session_state()
 
 
+
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
     return Response(status_code=204)
@@ -48,22 +51,21 @@ async def favicon():
 def set_state(payload: dict, request: Request, response: Response):
     sid = get_or_create_sid(request, response)
 
-    # 기존 상태 가져오기 (없으면 빈 dict)
     prev = SESSION_STATE.get(sid, {})
-    print("[SESSION_STATE]", SESSION_STATE)
-    # merge 규칙:
-    # payload에 있는 값만 갱신
-    # payload에 없으면 기존 값 유지
-    next_state = {
-        "bom_id": payload["bom_id"] if "bom_id" in payload else prev.get("bom_id"),
-        "spec": payload["spec"] if "spec" in payload else prev.get("spec"),
-        "selected_id": payload["selected_id"] if "selected_id" in payload else prev.get("selected_id"),
-    }
+
+    # core 키만 유지
+    allowed_keys = {"bom_id", "spec", "selected_id"}
+
+    # payload에서 core 키만 반영
+    filtered_payload = {k: v for k, v in payload.items() if k in allowed_keys}
+
+    next_state = {**prev, **filtered_payload}
 
     SESSION_STATE[sid] = next_state
     save_session_state()
 
     return SessionState(**next_state)
+
 
 
 @app.get("/api/state", response_model=SessionState)

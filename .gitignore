@@ -25,7 +25,8 @@ frontend/*.ntvs*
 frontend/*.njsproj
 frontend/*.sln
 frontend/*.sw?
-
+frontend/package-lock.json
+frontend/package.json
 
 ########################
 # Backend ignore
@@ -33,3 +34,8 @@ frontend/*.sw?
 
 backend/data/
 backend/__pycache__
+backend/Assembly/__pycache__
+backend/Sub/__pycache__
+backend/작업시간분석표DB.xlsx
+backend/9B753100
+backend/A4163100

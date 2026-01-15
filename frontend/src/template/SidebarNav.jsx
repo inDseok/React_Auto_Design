@@ -28,8 +28,8 @@ export default function SidebarNav({ collapsed, setCollapsed }) {
 
       
       <Link
-        to="/total"
-        className={`nav-item ${location.pathname === "/total" ? "active" : ""}`}
+        to="/assembly"
+        className={`nav-item ${location.pathname === "/assembly" ? "active" : ""}`}
       >
         <FaCalculator className="nav-icon" />
         <span className="nav-text">조립 총공수</span>

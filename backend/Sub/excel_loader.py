@@ -5,7 +5,7 @@ import uuid
 import openpyxl
 from openpyxl.utils import get_column_letter
 
-from backend.Sub.models import SubTree, SubNode, TreeMeta
+from backend.models import SubTree, SubNode, TreeMeta
 
 import re
 

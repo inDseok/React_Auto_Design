@@ -7,7 +7,8 @@ import Layout from "./template/Layout";
 import SubPage from "./pages/Sub/SubPage";
 import TimePage from "./pages/TimePage";
 import LobPage from "./pages/LobPage";
-import Total from "./pages/Total";
+import AssemblyPage from "./pages/Assembly/AssemblyPage";
+
 
 export default function App() {
   return (
@@ -17,7 +18,7 @@ export default function App() {
         <Layout>
           <Routes>
             <Route path="/" element={<Navigate to="/sub" replace />} />
-            <Route path="total" element={<Total />} />
+            <Route path="/assembly" element={<AssemblyPage />} />
             <Route path="/sub" element={<SubPage />} />
             <Route path="/time" element={<TimePage />} />
             <Route path="/lob" element={<LobPage />} />

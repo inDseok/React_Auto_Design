@@ -1,5 +1,5 @@
 from pathlib import Path
-from backend.Sub.models import SubTree
+from backend.models import SubTree
 import json
 from typing import Dict, List, Optional, Any
 

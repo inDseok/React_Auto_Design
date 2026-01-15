@@ -8,7 +8,7 @@ from uuid import uuid4
 from pydantic import BaseModel
 from fastapi import Cookie
 from typing import Dict, List, Optional, Any
-from backend.Sub.models import SubTree
+from backend.models import SubTree
 from fastapi import FastAPI, HTTPException, Request, Response, UploadFile, File
 
 SESSION_COOKIE = "sid"
