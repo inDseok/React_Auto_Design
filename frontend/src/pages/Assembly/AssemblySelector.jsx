@@ -15,6 +15,8 @@ function AssemblySelector({
 
   onAdd,
   onSave,
+  onAutoMatch,
+  onReset,
 }) {
   return (
     <div
@@ -69,6 +71,9 @@ function AssemblySelector({
 
       <button onClick={onAdd}>추가</button>
       <button onClick={onSave}>저장</button>
+      <button onClick={onAutoMatch}>자동 추가</button>
+      <button onClick={onReset}>초기화</button>
+
     </div>
   );
 }

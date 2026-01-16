@@ -2,13 +2,18 @@ import React from "react";
 import { Link, useLocation } from "react-router-dom";
 import { FaBars, FaCalculator, FaCogs, FaClock, FaProjectDiagram } from "react-icons/fa";
 import "../css/template/SidebarNav.css";
+import { useApp } from "../state/AppContext";
+
 
 export default function SidebarNav({ collapsed, setCollapsed }) {
 
   const location = useLocation();
+  const { state } = useApp();
+
 
   return (
     <nav className={collapsed ? "sidebar collapsed" : "sidebar"}>
+
 
       <div
         className="menu-btn"
@@ -28,12 +33,20 @@ export default function SidebarNav({ collapsed, setCollapsed }) {
 
       
       <Link
-        to="/assembly"
-        className={`nav-item ${location.pathname === "/assembly" ? "active" : ""}`}
+        to={
+          state.bomId && state.selectedSpec
+            ? `/assembly?bomId=${state.bomId}&spec=${encodeURIComponent(state.selectedSpec)}`
+            : "/assembly"
+        }
+
+        className={`nav-item ${
+          location.pathname.startsWith("/assembly") ? "active" : ""
+        }`}
       >
         <FaCalculator className="nav-icon" />
         <span className="nav-text">조립 총공수</span>
       </Link>
+
       
       <Link
         to="/time"

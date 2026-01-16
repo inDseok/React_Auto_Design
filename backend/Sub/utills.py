@@ -33,23 +33,3 @@ def read_bom_meta(root: Path) -> dict:
         return json.loads(meta_path.read_text(encoding="utf-8"))
     except Exception:
         return {}
-
-
-def load_session_state():
-    if not SESSION_STORE_PATH.exists():
-        return {}
-    try:
-        return json.loads(SESSION_STORE_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-
-DATA_DIR = Path("backend/data")
-
-SESSION_STORE_PATH = DATA_DIR / "session_state.json"
-SESSION_STATE: Dict[str, Dict[str, Optional[str]]] = load_session_state()
-
-def save_session_state():
-    SESSION_STORE_PATH.write_text(
-        json.dumps(SESSION_STATE, ensure_ascii=False, indent=2),
-        encoding="utf-8"
-    )

@@ -54,6 +54,7 @@ export default function SpecSelector() {
   function onConfirm() {
     if (!selected) return;
     actions.setSpec(selected);
+    localStorage.setItem("spec", selected);
   }
 
   if (!state.bomId) {

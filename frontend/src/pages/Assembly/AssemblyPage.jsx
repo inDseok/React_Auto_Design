@@ -8,12 +8,16 @@ import {
   deleteGroup,
   updateCell,
 } from "./rowActions";
+import { useApp } from "../../state/AppContext";
+import { useSearchParams } from "react-router-dom";
+
+const API_BASE = "http://localhost:8000/api/assembly";
 
 function AssemblyPage() {
   const [selectedSheet, setSelectedSheet] = useState("");
   const [selectedPart, setSelectedPart] = useState("");
   const [selectedOption, setSelectedOption] = useState("");
-
+  
   const [rows, setRows] = useState([]);
 
   const {
@@ -26,24 +30,55 @@ function AssemblyPage() {
     loadTasks,
     saveRowsToDB,
     loadSavedRows,
+    runAutoMatch,
   } = useAssemblyData();
+  
+  const [params] = useSearchParams();
+  const bomId = params.get("bomId");
+  const spec = params.get("spec");
+
+  const { state, actions } = useApp();
+
+  useEffect(() => {
+    if (bomId) actions.setBomContext(bomId);
+    if (spec) actions.setSpec(spec);
+  }, [bomId, spec]);
 
   // 초기 로딩
   useEffect(() => {
-    loadSheets();
-
-    (async () => {
-      const saved = await loadSavedRows();
-      if (saved.length > 0) {
-        const restored = saved.map((row) => ({
-          ...row,
-          __groupKey: row["부품 기준"], // ⭐ 그룹 기준
-          __isNew: false,
-        }));
-        setRows(restored);
+  
+    const init = async () => {
+      try {
+        loadSheets();
+  
+        const sessionRes = await fetch(`${API_BASE}/session-info`, {
+          credentials: "include",
+        });
+  
+        if (sessionRes.ok) {
+          const session = await sessionRes.json();
+  
+          if (session.ok) {
+            const saved = await loadSavedRows(bomId, spec);
+            if (saved.length > 0) {
+              const restored = saved.map((row) => ({
+                ...row,
+                __groupKey: row["부품 기준"],
+                __isNew: false,
+              }));
+              setRows(restored);
+            }
+          }
+        }
+      } catch (e) {
+        console.error(e);
       }
-    })();
-  }, []);
+    };
+  
+    init();
+  }, [bomId, spec]);
+  
+  
 
   // 시트 변경 → part 로딩
   useEffect(() => {
@@ -127,11 +162,37 @@ function AssemblyPage() {
 
   // 저장
   const handleSave = async () => {
-    const ok = await saveRowsToDB(rows);
+    const ok = await saveRowsToDB(bomId, spec, rows);
     if (ok) alert("저장 완료");
     else alert("저장 실패");
   };
 
+  const handleAutoMatch = async () => {
+    const added = await runAutoMatch(bomId, spec);
+  
+    if (added.length === 0) {
+      alert("자동 추가된 항목이 없습니다.");
+      return;
+    }
+    
+
+      const autoRows = added.map((row) => ({
+        id: crypto.randomUUID(),
+        ...row,
+        __groupKey: row["부품 기준"],
+        __isNew: false,
+    }));
+  
+    setRows((prev) => [...prev, ...autoRows]);
+  };
+  
+  const handleReset = () => {
+    setSelectedSheet("");
+    setSelectedPart("");
+    setSelectedOption("");
+    setRows([]);
+  };
+  
   return (
     <div style={{ padding: 20 }}>
       <h2>조립 총 공수</h2>
@@ -148,6 +209,8 @@ function AssemblyPage() {
         onChangeOption={setSelectedOption}
         onAdd={handleAddFromDB}
         onSave={handleSave}
+        onAutoMatch={handleAutoMatch}
+        onReset={handleReset}
       />
 
       <AssemblyTable

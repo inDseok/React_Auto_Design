@@ -13,10 +13,11 @@ from fastapi.staticfiles import StaticFiles
 
 from pathlib import Path
 
-from backend.Sub.utills import load_session_state, save_session_state
 from backend.Sub.bom_service import create_bom_run, DATA_DIR
 from backend.sub_router import sub_router
 from backend.Assembly_router import router as assembly_router
+
+from backend.Sub.session_store import get_or_create_sid, refresh_session_state, save_session_state, SESSION_STATE
 
 app = FastAPI()
 
@@ -38,9 +39,6 @@ app.add_middleware(
 DATA_DIR = Path("backend/data")
 
 SESSION_STORE_PATH = DATA_DIR / "session_state.json"
-SESSION_STATE: Dict[str, Dict[str, Optional[str]]] = load_session_state()
-
-
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():

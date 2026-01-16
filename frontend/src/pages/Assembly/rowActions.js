@@ -52,9 +52,19 @@ export function updateCell(rows, rowId, field, value) {
   return rows.map((row) => {
     if (row.id !== rowId) return row;
 
-    return {
+    const updated = {
       ...row,
       [field]: value,
     };
+
+    // 🔥 TOTAL 자동 계산
+    if (field === "SEC" || field === "반복횟수") {
+      const sec = Number(updated["SEC"]) || 0;
+      const cnt = Number(updated["반복횟수"]) || 0;
+      updated["TOTAL"] = sec * cnt;
+    }
+
+    return updated;
   });
 }
+

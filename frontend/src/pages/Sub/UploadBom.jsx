@@ -44,6 +44,8 @@ export default function UploadBom() {
       actions.setSelectedNode?.(null);
       actions.clearTreeCache?.();
 
+      localStorage.setItem("bom_id", data.bom_id);
+
       console.log("NEW bomId:", data.bom_id);
 
       setFile(null);

@@ -103,7 +103,7 @@ export function useAssemblyData() {
   // -----------------------------
   // 저장
   // -----------------------------
-  const saveRowsToDB = async (rows) => {
+  const saveRowsToDB = async (bomId, spec, rows) => {
     try {
       const cleanedRows = rows.map((row) => {
         const {
@@ -115,8 +115,11 @@ export function useAssemblyData() {
         } = row;
         return rest;
       });
-
-      const res = await fetch(`${API_BASE}/save`, {
+  
+      const url = `${API_BASE}/bom/${bomId}/spec/${spec}/save`;
+      console.log("save URL =", url);
+  
+      const res = await fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -124,9 +127,12 @@ export function useAssemblyData() {
         credentials: "include",
         body: JSON.stringify(cleanedRows),
       });
-
-      if (!res.ok) throw new Error("저장 실패");
-
+  
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "저장 실패");
+      }
+  
       return true;
     } catch (err) {
       console.error("saveRowsToDB error:", err);
@@ -137,14 +143,24 @@ export function useAssemblyData() {
   // -----------------------------
   // 로드
   // -----------------------------
-  const loadSavedRows = async () => {
+  const loadSavedRows = async (bomId, spec) => {
     try {
-      const res = await fetch(`${API_BASE}/load`, {
+      if (!bomId || !spec) {
+        console.warn("loadSavedRows: bomId/spec 없음", { bomId, spec });
+        return [];
+      }
+  
+      const url = `${API_BASE}/bom/${bomId}/spec/${spec}/load`;
+  
+      const res = await fetch(url, {
         credentials: "include",
       });
-
-      if (!res.ok) throw new Error("로드 실패");
-
+  
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "로드 실패");
+      }
+  
       const data = await res.json();
       return data.rows || [];
     } catch (err) {
@@ -152,7 +168,31 @@ export function useAssemblyData() {
       return [];
     }
   };
-
+    
+  const runAutoMatch = async (bomId, spec) => {
+    try {
+      const url = `${API_BASE}/bom/${bomId}/spec/${spec}/auto-match`;
+  
+      const res = await fetch(url, {
+        method: "POST",
+        credentials: "include",
+      });
+  
+      const text = await res.text();
+  
+      if (!res.ok) {
+        throw new Error(text || "자동 매칭 실패");
+      }
+  
+      const data = JSON.parse(text);
+      return data.added || [];
+    } catch (err) {
+      console.error("runAutoMatch error:", err);
+      return [];
+    }
+  };
+  
+  
   return {
     sheets,
     parts,
@@ -165,5 +205,6 @@ export function useAssemblyData() {
 
     saveRowsToDB,
     loadSavedRows,
+    runAutoMatch,
   };
 }

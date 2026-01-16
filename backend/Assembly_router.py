@@ -1,9 +1,12 @@
 from fastapi import APIRouter, HTTPException, Request, Response
 from backend.Assembly.excel_db import load_workbook_readonly
 from backend.Assembly.constants import REQUIRED_COLUMNS
+from backend.Assembly.auto_match import load_db_rows,load_tree_nodes_json, extract_json_ids,match_one_best,JW_THRESHOLD,TOPK,get_db_meta_rows_for_part,load_excel_rows_for_matches, normalize_merged_rows
 from backend.Sub.session_excel import get_or_create_sid
-from backend.Sub.session_store import SESSION_STATE
-from typing import List, Dict
+
+from backend.Sub.session_store import get_or_create_sid, refresh_session_state, save_session_state, SESSION_STATE
+
+from typing import List, Dict, Any
 from pathlib import Path
 import json
 import threading
@@ -180,20 +183,12 @@ def get_tasks(
 # -----------------------------
 # JSON 저장 / 로드 (기존 유지)
 # -----------------------------
-@router.post("/save")
-def save_assembly(rows: List[Dict], request: Request, response: Response):
-    sid = get_or_create_sid(request, response)
-    state = SESSION_STATE.get(sid)
-
-    if not state:
-        raise HTTPException(400, "세션 없음")
-
-    bom_id = state.get("bom_id")
-    spec = state.get("spec")
-
-    if not bom_id or not spec:
-        raise HTTPException(400, "bom_id 또는 spec 없음")
-
+@router.post("/bom/{bom_id}/spec/{spec}/save")
+def save_assembly(
+    bom_id: str,
+    spec: str,
+    rows: List[Dict]
+):
     dir_path = DATA_DIR / "bom_runs" / bom_id
     dir_path.mkdir(parents=True, exist_ok=True)
 
@@ -211,20 +206,9 @@ def save_assembly(rows: List[Dict], request: Request, response: Response):
     return {"status": "ok"}
 
 
-@router.get("/load")
-def load_assembly(request: Request, response: Response):
-    sid = get_or_create_sid(request, response)
-    state = SESSION_STATE.get(sid)
 
-    if not state:
-        raise HTTPException(400, "세션 없음")
-
-    bom_id = state.get("bom_id")
-    spec = state.get("spec")
-
-    if not bom_id or not spec:
-        raise HTTPException(400, "bom_id 또는 spec 없음")
-
+@router.get("/bom/{bom_id}/spec/{spec}/load")
+def load_assembly(bom_id: str, spec: str):
     path = DATA_DIR / "bom_runs" / bom_id / f"{spec}_assembly.json"
 
     if not path.exists():
@@ -232,3 +216,85 @@ def load_assembly(request: Request, response: Response):
 
     data = json.loads(path.read_text(encoding="utf-8"))
     return data
+
+
+@router.get("/session-info")
+def get_session_info(request: Request, response: Response):
+    sid = get_or_create_sid(request, response)
+    refresh_session_state()
+    state = SESSION_STATE.get(sid)
+
+    print("COOKIE SID:", sid)
+    print("SESSION_STATE keys:", list(SESSION_STATE.keys())[:5])
+
+    if not state:
+        return {"ok": False}
+
+    bom_id = state.get("bom_id")
+    spec = state.get("spec")
+
+    if not bom_id or not spec:
+        return {"ok": False}
+
+    return {
+        "ok": True,
+        "bom_id": bom_id,
+        "spec": spec,
+    }
+
+
+@router.post("/bom/{bom_id}/spec/{spec}/auto-match")
+def auto_match_assembly(bom_id: str, spec: str):
+    root_dir = DATA_DIR / "bom_runs" / bom_id
+    tree_json_path = root_dir / f"{spec}.json"
+
+    if not tree_json_path.exists():
+        raise HTTPException(404, f"트리 JSON 없음: {tree_json_path}")
+
+    excel_path = DATA_DIR.parent / "작업시간분석표DB.xlsx"
+    if not excel_path.exists():
+        raise HTTPException(500, f"DB 엑셀 없음: {excel_path}")
+
+    db_rows, db_choices = load_db_rows(excel_path)
+
+    nodes = load_tree_nodes_json(root_dir, spec)
+    json_ids = extract_json_ids(nodes)
+
+    added = []
+    skipped = []
+
+    for j in json_ids:
+        best = match_one_best(j, db_rows, db_choices, topk=TOPK)
+        if not best:
+            continue
+
+        if best["score_jw"] >= JW_THRESHOLD:
+            matched_meta_rows = get_db_meta_rows_for_part(
+                db_rows, best["db_part_raw"]
+            )
+
+            real_rows = load_excel_rows_for_matches(
+                excel_path, matched_meta_rows
+            )
+
+            # 🔥 여기서 nan 상속 정규화
+            real_rows = normalize_merged_rows(real_rows)
+
+            for r in real_rows:
+                added.append(r)
+
+        else:
+            skipped.append({
+                "json_id": j,
+                "best_score": float(best["score_jw"]),
+            })
+
+    return {
+        "threshold": JW_THRESHOLD,
+        "count_json_ids": len(json_ids),
+        "count_added": len(added),
+        "count_skipped": len(skipped),
+        "added": added,
+        "skipped": skipped,
+    }
+

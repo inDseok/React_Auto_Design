@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from backend.Sub.session_excel import get_or_create_sid, SessionState
 from typing import Dict, List, Optional, Any
 
 import json
@@ -16,20 +15,21 @@ from pathlib import Path
 
 from backend.models import SubNodePatch, SubTree, MoveNodeRequest, SubNode, NodeType
 from backend.Sub.bom_service import create_bom_run
-from backend.Sub.utills import find_node_by_id, load_tree_json, save_tree_json, read_bom_meta,load_session_state,save_session_state
+from backend.Sub.utills import  load_tree_json, save_tree_json, read_bom_meta
 from backend.Sub.excel_loader import build_tree_from_sheet
 from typing import Optional
 from openpyxl import load_workbook
+from backend.Sub.session_store import get_or_create_sid, refresh_session_state, save_session_state, SESSION_STATE
 
 from backend.Sub.json_to_excel import export_tree_excel_from_json
 from pathlib import Path
 
-DATA_DIR = Path(__file__).resolve().parents[1] /"backend"/ "data"
 sub_router = APIRouter(prefix="/sub", tags=["SUB API"])
 
 
+BASE_DIR = Path(__file__).resolve().parents[1]   # backend
+DATA_DIR = BASE_DIR / "backend" /"data"
 SESSION_STORE_PATH = DATA_DIR / "session_state.json"
-SESSION_STATE: Dict[str, Dict[str, Optional[str]]] = load_session_state()
 
 @sub_router.post("/bom/upload")
 async def upload_bom(file: UploadFile = File(...)):
@@ -95,6 +95,7 @@ def get_tree(
     spec: Optional[str] = None,
 ):
     sid = get_or_create_sid(request, response)
+    refresh_session_state()
     state = SESSION_STATE.get(sid, {})
 
     resolved_spec = spec or state.get("spec")
@@ -166,6 +167,7 @@ def patch_node(
     response: Response,
 ):
     sid = get_or_create_sid(request, response)
+    refresh_session_state()
     state = SESSION_STATE.get(sid, {})
 
     spec = state.get("spec")
@@ -299,6 +301,7 @@ def create_node(
     response: Response,
 ):
     sid = get_or_create_sid(request, response)
+    refresh_session_state()
     state = SESSION_STATE.get(sid, {})
 
     spec = state.get("spec")
@@ -377,6 +380,7 @@ def delete_node(
     response: Response,
 ):
     sid = get_or_create_sid(request, response)
+    refresh_session_state()
     state = SESSION_STATE.get(sid, {})
 
     spec = state.get("spec")
@@ -433,6 +437,7 @@ def add_node(
     response: Response,
 ):
     sid = get_or_create_sid(request, response)
+    refresh_session_state()
     state = SESSION_STATE.get(sid, {})
 
     spec = state.get("spec")
