@@ -4,9 +4,11 @@ function RowContextMenu({
   x,
   y,
   onClose,
-  onInsertBelow,
+  onInsertSameGroup,
+  onInsertNewGroup,
   onDeleteRow,
   onDeleteGroup,
+  onDeleteOptionGroup,
 }) {
   const menuRef = useRef(null);
 
@@ -43,12 +45,14 @@ function RowContextMenu({
         boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
         zIndex: 1000,
         padding: 4,
-        minWidth: 160,
+        minWidth: 180,
       }}
     >
-      <MenuItem label="이 행 아래 추가" onClick={onInsertBelow} />
-      <MenuItem label="이 행 삭제" onClick={onDeleteRow} />
+      <MenuItem label="같은 그룹에 행 추가" onClick={onInsertSameGroup} />
+      <MenuItem label="새 그룹 추가" onClick={onInsertNewGroup} />
       <hr style={{ margin: "4px 0" }} />
+      <MenuItem label="이 행 삭제" onClick={onDeleteRow} />
+      <MenuItem label="이 옵션 삭제" onClick={onDeleteOptionGroup} />
       <MenuItem label="그룹 전체 삭제" onClick={onDeleteGroup} danger />
     </div>
   );

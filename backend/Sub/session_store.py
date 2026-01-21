@@ -8,7 +8,7 @@ from fastapi import Request, Response, HTTPException
 SESSION_COOKIE = "sid"
 
 BASE_DIR = Path(__file__).resolve().parents[1]  # 프로젝트 루트
-DATA_DIR = BASE_DIR / "backend" / "data"
+DATA_DIR = BASE_DIR / "backend"
 
 SESSION_STORE_PATH = DATA_DIR / "session_state.json"
 

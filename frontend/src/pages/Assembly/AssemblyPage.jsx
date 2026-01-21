@@ -3,10 +3,11 @@ import AssemblySelector from "./AssemblySelector";
 import AssemblyTable from "./AssemblyTable";
 import { useAssemblyData } from "./useAssemblyData";
 import {
-  insertRowBelow,
+  insertSameGroupRow, insertNewGroupRow,
   deleteRow,
   deleteGroup,
   updateCell,
+  deleteOptionGroup,
 } from "./rowActions";
 import { useApp } from "../../state/AppContext";
 import { useSearchParams } from "react-router-dom";
@@ -144,10 +145,14 @@ function AssemblyPage() {
   };
 
   // 행 조작
-  const handleInsertBelow = (rowId) => {
-    setRows((prev) => insertRowBelow(prev, rowId));
+  const handleInsertSameGroup = (rowId) => {
+    setRows((prev) => insertSameGroupRow(prev, rowId));
   };
-
+  
+  const handleInsertNewGroup = (rowId) => {
+    setRows((prev) => insertNewGroupRow(prev, rowId));
+  };
+  
   const handleDeleteRow = (rowId) => {
     setRows((prev) => deleteRow(prev, rowId));
   };
@@ -157,8 +162,34 @@ function AssemblyPage() {
   };
 
   const handleCellChange = (rowId, field, value) => {
-    setRows((prev) => updateCell(prev, rowId, field, value));
+    setRows((prev) => {
+      const target = prev.find((r) => r.id === rowId);
+      if (!target) return prev;
+  
+      // 작업자 컬럼: 값 입력일 때만 그룹 전파
+      if (
+        field === "작업자" &&
+        value !== "" &&               // 비어있지 않고
+        value !== target[field]      // 실제로 바뀌었고
+      ) {
+        return prev.map((r) => {
+          if (
+            r["부품 기준"] === target["부품 기준"] &&
+            r["OPTION"] === target["OPTION"]
+          ) {
+            return { ...r, 작업자: value };
+          }
+          return r;
+        });
+      }
+  
+      // 기본: 개별 셀만 변경
+      return updateCell(prev, rowId, field, value);
+    });
   };
+  
+  
+  
 
   // 저장
   const handleSave = async () => {
@@ -193,6 +224,10 @@ function AssemblyPage() {
     setRows([]);
   };
   
+  const handleDeleteOptionGroup = (partKey, optionValue) => {
+    setRows((prev) => deleteOptionGroup(prev, partKey, optionValue));
+  };
+  
   return (
     <div style={{ padding: 20 }}>
       <h2>조립 총 공수</h2>
@@ -215,11 +250,15 @@ function AssemblyPage() {
 
       <AssemblyTable
         rows={rows}
-        onInsertBelow={handleInsertBelow}
+        onInsertSameGroup={handleInsertSameGroup}
+        onInsertNewGroup={handleInsertNewGroup}
         onDeleteRow={handleDeleteRow}
         onDeleteGroup={handleDeleteGroup}
         onCellChange={handleCellChange}
+        onRowsChange={(nextRows) => setRows(nextRows)}
+        onDeleteOptionGroup={handleDeleteOptionGroup}
       />
+
     </div>
   );
 }

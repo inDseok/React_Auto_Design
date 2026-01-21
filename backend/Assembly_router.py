@@ -103,7 +103,7 @@ def build_assembly_cache():
                 "작업자": row[col_idx["작업자\n(작업분배)"]],
                 "no": row[col_idx["no"]],
                 "동작요소": row[col_idx["동작요소"]],
-                "반복횟수": row[col_idx["반복횟수\n(가중치)"]],
+                "반복횟수": row[col_idx["반복횟수"]],
                 "SEC": row[col_idx["SEC"]],
                 "TOTAL": row[col_idx["TOTAL"]],
             }
