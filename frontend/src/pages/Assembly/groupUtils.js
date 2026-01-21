@@ -1,40 +1,47 @@
+// src/.../groupUtils.js
+// 최종본: "부품 기준", "요소작업", "OPTION"은 서로 독립 병합
+// - 병합/상속은 같은 __groupKey 안에서만 수행
+// - __isNew === true 행은 상속/병합 모두 금지(항상 단독)
+// - 상속은 "엑셀 빈칸"만 채움(실제 값이 있으면 유지)
+// - 삭제해도 아래 행은 같은 그룹 내에서 계속 상속되어 "이어져 보임" (요구사항 YES)
+
 export function computeRowspanInfo(rows) {
   if (!Array.isArray(rows)) return [];
 
   const result = rows.map((r) => ({ ...r }));
   const columns = ["부품 기준", "요소작업", "OPTION"];
 
-  // 1) 값 상속 (같은 그룹 내에서만, __isNew 제외)
-  for (let col of columns) {
+  // 1) 값 상속: 같은 그룹(__groupKey) 안에서만, __isNew 제외
+  for (const col of columns) {
     let lastValue = null;
     let lastGroupKey = null;
-
+  
     for (let i = 0; i < result.length; i++) {
       const row = result[i];
-
+  
       if (row.__isNew) {
-        lastValue = null;
-        lastGroupKey = null;
         continue;
       }
-
+  
+      const gk = row.__groupKey ?? null;
+  
+      if (gk !== lastGroupKey) {
+        lastGroupKey = gk;
+      }
+  
       const val = row[col];
-
-      if (
-        (val === "" || val === null || val === undefined) &&
-        lastValue !== null &&
-        row.__groupKey === lastGroupKey
-      ) {
+  
+      if ((val === "" || val === null || val === undefined) && lastValue !== null) {
         row[col] = lastValue;
       } else {
         lastValue = val;
-        lastGroupKey = row.__groupKey;
       }
     }
   }
+  
 
-  // 2) rowspan 초기화
-  for (let row of result) {
+  // 2) rowspan 메타 초기화
+  for (const row of result) {
     row.__showPart = false;
     row.__partRowspan = 1;
 
@@ -45,45 +52,46 @@ export function computeRowspanInfo(rows) {
     row.__optionRowspan = 1;
   }
 
+  // 3) 컬럼별 병합: 같은 그룹(__groupKey) + 같은 값만 병합
   function processColumn(col, showKey, spanKey) {
     let i = 0;
 
     while (i < result.length) {
       const row = result[i];
 
-      // 새 그룹은 무조건 단독
+      // 새 행은 항상 단독
       if (row.__isNew) {
         row[showKey] = true;
         row[spanKey] = 1;
-        i++;
+        i += 1;
         continue;
       }
 
-      let j = i + 1;
-      let span = 1;
+      const baseGroupKey = row.__groupKey ?? null;
 
+      let j = i + 1;
       while (j < result.length) {
         const next = result[j];
 
-        // 새 그룹이면 병합 끊기
+        // 새 행이면 병합 경계
         if (next.__isNew) break;
 
-        // 다른 그룹이면 병합 끊기
-        if (next.__groupKey !== row.__groupKey) break;
+        // 그룹이 바뀌면 병합 경계
+        if ((next.__groupKey ?? null) !== baseGroupKey) break;
 
-        if (next[col] === row[col]) {
-          span++;
-          j++;
-        } else {
-          break;
-        }
+        // 값이 다르면 병합 경계
+        if (next[col] !== row[col]) break;
+
+        j += 1;
       }
 
+      const span = j - i;
       row[showKey] = true;
       row[spanKey] = span;
 
       for (let k = i + 1; k < j; k++) {
         result[k][showKey] = false;
+        result[k][spanKey] = 1;
       }
 
       i = j;
