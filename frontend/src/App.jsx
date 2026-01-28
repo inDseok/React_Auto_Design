@@ -8,6 +8,7 @@ import SubPage from "./pages/Sub/SubPage";
 import TimePage from "./pages/TimePage";
 import LobPage from "./pages/LobPage";
 import AssemblyPage from "./pages/Assembly/AssemblyPage";
+import SequencePage from "./pages/Sequence/SequencePage";
 
 
 export default function App() {
@@ -18,6 +19,7 @@ export default function App() {
         <Layout>
           <Routes>
             <Route path="/" element={<Navigate to="/sub" replace />} />
+            <Route path="/sequence" element={<SequencePage />} />
             <Route path="/assembly" element={<AssemblyPage />} />
             <Route path="/sub" element={<SubPage />} />
             <Route path="/time" element={<TimePage />} />

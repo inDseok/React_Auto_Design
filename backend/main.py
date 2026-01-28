@@ -16,6 +16,7 @@ from pathlib import Path
 from backend.Sub.bom_service import create_bom_run, DATA_DIR
 from backend.sub_router import sub_router
 from backend.Assembly_router import router as assembly_router
+from backend.Seuqence_router import router as seuquence_router 
 
 from backend.Sub.session_store import get_or_create_sid, refresh_session_state, save_session_state, SESSION_STATE
 
@@ -23,6 +24,7 @@ app = FastAPI()
 
 app.include_router(sub_router, prefix="/api")
 app.include_router(assembly_router, prefix="/api")
+app.include_router(seuquence_router, prefix="/api")
 
 templates = Jinja2Templates(directory="frontend/template")
 app.mount("/static", StaticFiles(directory="frontend/static"), name="static")

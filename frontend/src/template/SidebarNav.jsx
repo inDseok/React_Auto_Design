@@ -1,6 +1,6 @@
 import React from "react";
 import { Link, useLocation } from "react-router-dom";
-import { FaBars, FaCalculator, FaCogs, FaClock, FaProjectDiagram } from "react-icons/fa";
+import { FaBars, FaCalculator, FaCogs, FaClock, FaProjectDiagram, FaStream } from "react-icons/fa";
 import "../css/template/SidebarNav.css";
 import { useApp } from "../state/AppContext";
 
@@ -31,7 +31,20 @@ export default function SidebarNav({ collapsed, setCollapsed }) {
         <span className="nav-text">서브 부품 구성도</span>
       </Link>
 
-      
+      <Link
+        to={
+          state.bomId && state.selectedSpec
+            ? `/sequence?bomId=${state.bomId}&spec=${encodeURIComponent(state.selectedSpec)}`
+            : "/sequence"
+        }
+        className={`nav-item ${
+          location.pathname.startsWith("/sequence") ? "active" : ""
+        }`}
+      >
+        <FaStream className="nav-icon" />
+        <span className="nav-text">시퀀스 구성</span>
+      </Link>
+
       <Link
         to={
           state.bomId && state.selectedSpec
