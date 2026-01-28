@@ -7,7 +7,9 @@ import { SequenceDnDProvider } from "./SequenceDnDContext";
 export default function SequencePage() {
   return (
     <ReactFlowProvider>
+      <SequenceDnDProvider>
         <SequenceEditor />
+      </SequenceDnDProvider>
     </ReactFlowProvider>
   );
 }
