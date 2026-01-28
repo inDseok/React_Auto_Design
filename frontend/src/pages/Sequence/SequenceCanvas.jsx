@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -21,10 +21,45 @@ export default function SequenceCanvas({
   setEdges,
   onSelectNode,
   onSelectEdge,
+  onKeyDown,
 }) {
   const [dragItem] = useSequenceDnD();
   const { screenToFlowPosition } = useReactFlow();
 
+  const [linkFromNodeId, setLinkFromNodeId] = useState(null);
+
+  const [contextMenu, setContextMenu] = useState(null);
+
+  const onNodeClick = useCallback((event, node) => {
+    event.stopPropagation(); // 선택 충돌 방지
+  
+    if (!linkFromNodeId) {
+      setLinkFromNodeId(node.id);
+      return;
+    }
+  
+    if (linkFromNodeId === node.id) {
+      // 자기 자신 클릭 → 취소
+      setLinkFromNodeId(null);
+      return;
+    }
+  
+    setEdges((eds) =>
+      addEdge(
+        {
+          id: `E-${linkFromNodeId}-${node.id}`,
+          source: linkFromNodeId,
+          target: node.id,
+          type: "smoothstep",
+        },
+        eds
+      )
+    );
+  
+    setLinkFromNodeId(null);
+  }, [linkFromNodeId, setEdges]);
+  
+  
   const nodeTypes = useMemo(
     () => ({
       PART: PartNode,
@@ -113,15 +148,146 @@ export default function SequenceCanvas({
     },
     [dragItem, screenToFlowPosition, setNodes]
   );
-
+  const getAbsolutePosition = (node, nodes) => {
+    let x = node.position.x;
+    let y = node.position.y;
+  
+    if (node.parentNode) {
+      const parent = nodes.find((n) => n.id === node.parentNode);
+      if (parent) {
+        x += parent.position.x;
+        y += parent.position.y;
+      }
+    }
+  
+    return { x, y };
+  };
+  
+  const onNodeDragStop = useCallback((event, node) => {
+    if (node.type === "GROUP") return;
+  
+    setNodes((nds) => {
+      const dragged = nds.find((n) => n.id === node.id);
+      if (!dragged) return nds;
+  
+      const { x: nodeX, y: nodeY } = (() => {
+        let x = node.position.x;
+        let y = node.position.y;
+        if (node.parentNode) {
+          const p = nds.find((n) => n.id === node.parentNode);
+          if (p) {
+            x += p.position.x;
+            y += p.position.y;
+          }
+        }
+        return { x, y };
+      })();
+  
+      const groups = nds.filter((n) => n.type === "GROUP");
+  
+      let targetGroup = null;
+      for (const g of groups) {
+        const gw = g.style?.width;
+        const gh = g.style?.height;
+        if (!gw || !gh) continue;
+  
+        if (
+          nodeX > g.position.x &&
+          nodeX < g.position.x + gw &&
+          nodeY > g.position.y &&
+          nodeY < g.position.y + gh
+        ) {
+          targetGroup = g;
+          break;
+        }
+      }
+  
+      return nds.map((n) => {
+        if (n.id !== node.id) return n;
+  
+        if (targetGroup) {
+          return {
+            ...n,
+            parentNode: targetGroup.id,
+            extent: "parent",
+            position: {
+              x: nodeX - targetGroup.position.x,
+              y: nodeY - targetGroup.position.y,
+            },
+          };
+        }
+  
+        return {
+          ...n,
+          parentNode: undefined,
+          extent: undefined,
+          position: { x: nodeX, y: nodeY },
+        };
+      });
+    });
+  }, []);
+  
+  
   return (
-    <div style={{ width: "100%", height: "100%" }} onDrop={onDrop} onDragOver={onDragOver}>
+    <div
+      style={{ width: "100%", height: "100%" }}
+      tabIndex={0}
+      onKeyDown={onKeyDown}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        setContextMenu({
+          x: e.clientX,
+          y: e.clientY,
+        });
+      }}
+      onDrop={onDrop}
+      onDragOver={onDragOver}
+    >
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          marginBottom: 8,
+        }}
+      >
+        <button
+          onClick={() => {
+            setNodes((nds) =>
+              nds.concat({
+                id: "GROUP-1",
+                type: "GROUP",
+                position: { x: 200, y: 200 },
+                draggable: true,        // 그룹 이동은 허용
+                selectable: false,      // ❌ 선택 안 됨
+                connectable: false,     // ❌ 엣지 연결 대상 아님
+                deletable: true,        // 삭제는 허용
+                style: {
+                  width: 500,
+                  height: 300,
+                  zIndex: -1,           // ⭐ 핵심
+                },
+                data: {
+                  label: "공정 그룹",
+                },
+              }
+              )
+            );
+          }}
+        >
+          + 그룹 생성
+        </button>
+      </div>
+
       <ReactFlow
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onNodeClick={onNodeClick}
         onConnect={onConnect}
         onSelectionChange={onSelectionChange}
+        onNodeDragStop={onNodeDragStop}
         fitView
         minZoom={0.1}
         maxZoom={2}
@@ -130,6 +296,7 @@ export default function SequenceCanvas({
         zoomOnPinch
         zoomOnDoubleClick
       >
+        
         <Background />
         <Controls position="bottom-left" />
         <MiniMap position="bottom-right" zoomable pannable />

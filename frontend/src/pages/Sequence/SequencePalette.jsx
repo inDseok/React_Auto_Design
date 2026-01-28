@@ -19,6 +19,7 @@ export default function SequencePalette({   parts = [], processes = [], }) {
         background: "#ffffff",
       }}
     >
+      
       {/* PART 섹션 */}
       <div style={{ marginBottom: 20 }}>
         <div

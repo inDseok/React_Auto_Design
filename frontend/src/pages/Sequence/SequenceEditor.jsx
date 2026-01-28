@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { useLocation } from "react-router-dom";
 
 import SequencePalette from "./SequencePalette";
@@ -84,6 +84,29 @@ export default function SequenceEditor() {
       .finally(() => setLoading(false));
   }, [bomId, spec]);
 
+  const onKeyDown = useCallback(
+    (e) => {
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+  
+      if (selectedEdgeId) {
+        setEdges((eds) => eds.filter((e) => e.id !== selectedEdgeId));
+        setSelectedEdgeId(null);
+        return;
+      }
+  
+      if (selectedNodeId) {
+        setNodes((nds) => nds.filter((n) => n.id !== selectedNodeId));
+        setEdges((eds) =>
+          eds.filter(
+            (e) => e.source !== selectedNodeId && e.target !== selectedNodeId
+          )
+        );
+        setSelectedNodeId(null);
+      }
+    },
+    [selectedNodeId, selectedEdgeId, setNodes, setEdges]
+  );
+  
   // ===============================
   // UI
   // ===============================
@@ -140,6 +163,7 @@ export default function SequenceEditor() {
           setEdges={setEdges}
           onSelectNode={setSelectedNodeId}
           onSelectEdge={setSelectedEdgeId}
+          onKeyDown={onKeyDown}
         />
       </div>
 
