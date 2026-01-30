@@ -1,7 +1,7 @@
 import React from "react";
 import { useSequenceDnD } from "./SequenceDnDContext";
 
-export default function SequencePalette({   parts = [], processes = [], }) {
+export default function SequencePalette({ parts = [], processes = [] }) {
   const [, setDragItem] = useSequenceDnD();
 
   const onDragStart = (e, payload) => {
@@ -19,8 +19,9 @@ export default function SequencePalette({   parts = [], processes = [], }) {
         background: "#ffffff",
       }}
     >
-      
-      {/* PART 섹션 */}
+      {/* ===============================
+          PART 섹션
+         =============================== */}
       <div style={{ marginBottom: 20 }}>
         <div
           style={{
@@ -38,41 +39,62 @@ export default function SequencePalette({   parts = [], processes = [], }) {
           </div>
         )}
 
-        {parts.map((part) => (
-          <div
-            key={part.partId}
-            draggable
-            onDragStart={(e) =>
-              onDragStart(e, {
-                nodeType: "PART",
-                data: {
-                  partId: part.partId,
-                  partName: part.partName,
-                  inhouse: part.inhouse,
-                  statusLabel: "",
-                },
-              })
-            }
-            style={{
-              padding: "6px 8px",
-              marginBottom: 6,
-              borderRadius: 6,
-              border: "1px solid #cbd5e1",
-              cursor: "grab",
-              background: "#f8fafc",
-              fontSize: 12,
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-            }}
-            title={part.partName}
-          >
-            {part.partId}
-          </div>
-        ))}
+        {parts.map((part) => {
+          const displayLabel = part.partBase ?? part.partId;
+          const isMatched = Boolean(part.partBase);
+
+          return (
+            <div
+              key={part.partBase ?? part.partId}
+              draggable
+              onDragStart={(e) =>
+                onDragStart(e, {
+                  nodeType: "PART",
+                  data: {
+                    // 원본 BOM 기준
+                    partId: part.partId,
+                    partName: part.partName,
+                    inhouse: part.inhouse,
+
+                    // 🔑 auto-match 결과
+                    partBase: part.partBase,
+                    sourceSheet: part.sourceSheet,
+
+                    // 노드 상태용
+                    option: "",
+                    statusLabel: "",
+                  },
+                })
+              }
+              style={{
+                padding: "6px 8px",
+                marginBottom: 6,
+                borderRadius: 6,
+                border: isMatched
+                  ? "1px solid #cbd5e1"
+                  : "1px dashed #fca5a5",
+                cursor: "grab",
+                background: isMatched ? "#f8fafc" : "#fef2f2",
+                fontSize: 12,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+              title={
+                isMatched
+                  ? `DB 기준: ${part.partBase}\n원본: ${part.partId}\n시트: ${part.sourceSheet}`
+                  : `매칭 실패\n원본: ${part.partId}`
+              }
+            >
+              {displayLabel}
+            </div>
+          );
+        })}
       </div>
 
-      {/* PROCESS 섹션 */}
+      {/* ===============================
+          PROCESS 섹션
+         =============================== */}
       <div>
         <div
           style={{
@@ -93,12 +115,12 @@ export default function SequencePalette({   parts = [], processes = [], }) {
                 nodeType: "PROCESS",
                 data: {
                   processKey: p.processKey,
-                  processType: p.processType,   // STANDARD
-                  label: p.label,               // ⭐ part_base (공정명)
-                  sourceSheet: p.sourceSheet,
+                  processType: p.processType,
+                  label: p.label,          // 공정 표시명
                   partBase: p.partBase,
+                  sourceSheet: p.sourceSheet,
                 },
-              })              
+              })
             }
             style={{
               padding: "6px 8px",
@@ -108,6 +130,9 @@ export default function SequencePalette({   parts = [], processes = [], }) {
               cursor: "grab",
               background: "#fff7ed",
               fontSize: 12,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
             }}
             title={`${p.sourceSheet} / ${p.partBase}`}
           >
@@ -118,4 +143,3 @@ export default function SequencePalette({   parts = [], processes = [], }) {
     </div>
   );
 }
-

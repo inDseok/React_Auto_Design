@@ -24,21 +24,33 @@ export default function SequenceEditor() {
   // ===============================
   const [nodes, setNodes] = useState([]);
   const [edges, setEdges] = useState([]);
-
+  const [groups, setGroups] = useState([]);
   const [selectedNodeId, setSelectedNodeId] = useState(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState(null);
 
   // ===============================
   // UI state
   // ===============================
-  const [loading, setLoading] = useState(false);
+  const [loadingParts, setLoadingParts] = useState(false);
+  const [loadingProcesses, setLoadingProcesses] = useState(false);
   const [error, setError] = useState(null);
+
+  // ===============================
+  // Helpers
+  // ===============================
+  const clearSelection = useCallback(() => {
+    setSelectedNodeId(null);
+    setSelectedEdgeId(null);
+  }, []);
 
   // ===============================
   // PROCESS templates 로드
   // ===============================
   useEffect(() => {
     if (!bomId || !spec) return;
+
+    let cancelled = false;
+    setLoadingProcesses(true);
 
     fetch(`${API_BASE}/api/sequence/process-templates`, {
       credentials: "include",
@@ -48,11 +60,23 @@ export default function SequenceEditor() {
         return res.json();
       })
       .then((data) => {
-        setProcessTemplates(data.processes || []);
+        if (cancelled) return;
+        setProcessTemplates(Array.isArray(data.processes) ? data.processes : []);
       })
       .catch((err) => {
         console.error(err);
+        if (cancelled) return;
+        setProcessTemplates([]);
+        setError((prev) => prev || err.message);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLoadingProcesses(false);
       });
+
+    return () => {
+      cancelled = true;
+    };
   }, [bomId, spec]);
 
   // ===============================
@@ -61,13 +85,15 @@ export default function SequenceEditor() {
   useEffect(() => {
     if (!bomId || !spec) return;
 
-    setLoading(true);
+    let cancelled = false;
+
+    setLoadingParts(true);
     setError(null);
 
     fetch(
-      `${API_BASE}/api/sequence/inhouse-parts?bomId=${bomId}&spec=${encodeURIComponent(
-        spec
-      )}`,
+      `${API_BASE}/api/sequence/inhouse-parts?bomId=${encodeURIComponent(
+        bomId
+      )}&spec=${encodeURIComponent(spec)}`,
       { credentials: "include" }
     )
       .then((res) => {
@@ -75,30 +101,48 @@ export default function SequenceEditor() {
         return res.json();
       })
       .then((data) => {
-        setInhouseParts(data.parts || []);
+        if (cancelled) return;
+
+        const parts = Array.isArray(data.parts) ? data.parts : [];
+
+        // ✅ 핵심: 서버가 내려주는 partBase/sourceSheet 보존
+        // (Palette에서 이 값을 payload에 포함시키면 PART OPTION이 동작함)
+        setInhouseParts(parts);
       })
       .catch((err) => {
         console.error(err);
+        if (cancelled) return;
+        setInhouseParts([]);
         setError(err.message);
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (cancelled) return;
+        setLoadingParts(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [bomId, spec]);
 
+  // ===============================
+  // Delete / Backspace 삭제
+  // ===============================
   const onKeyDown = useCallback(
     (e) => {
       if (e.key !== "Delete" && e.key !== "Backspace") return;
-  
+
       if (selectedEdgeId) {
-        setEdges((eds) => eds.filter((e) => e.id !== selectedEdgeId));
+        setEdges((eds) => eds.filter((edge) => edge.id !== selectedEdgeId));
         setSelectedEdgeId(null);
         return;
       }
-  
+
       if (selectedNodeId) {
-        setNodes((nds) => nds.filter((n) => n.id !== selectedNodeId));
+        setNodes((nds) => nds.filter((node) => node.id !== selectedNodeId));
         setEdges((eds) =>
           eds.filter(
-            (e) => e.source !== selectedNodeId && e.target !== selectedNodeId
+            (edge) => edge.source !== selectedNodeId && edge.target !== selectedNodeId
           )
         );
         setSelectedNodeId(null);
@@ -106,7 +150,19 @@ export default function SequenceEditor() {
     },
     [selectedNodeId, selectedEdgeId, setNodes, setEdges]
   );
-  
+
+  // ===============================
+  // bomId/spec 없을 때 가드 UI
+  // ===============================
+  if (!bomId || !spec) {
+    return (
+      <div style={{ padding: 16 }}>
+        bomId 또는 spec 파라미터가 없습니다. (URL 쿼리: ?bomId=...&spec=...)
+      </div>
+    );
+  }
+
+  const loading = loadingParts || loadingProcesses;
   // ===============================
   // UI
   // ===============================
@@ -118,6 +174,10 @@ export default function SequenceEditor() {
         gap: 12,
         padding: 12,
         boxSizing: "border-box",
+      }}
+      onClick={() => {
+        // 바깥 클릭 시 선택 해제 원하면 사용 (필요 없으면 제거 가능)
+        // clearSelection();
       }}
     >
       {/* ===============================
@@ -159,8 +219,10 @@ export default function SequenceEditor() {
         <SequenceCanvas
           nodes={nodes}
           edges={edges}
+          groups={groups}
           setNodes={setNodes}
           setEdges={setEdges}
+          setGroups={setGroups}
           onSelectNode={setSelectedNodeId}
           onSelectEdge={setSelectedEdgeId}
           onKeyDown={onKeyDown}
@@ -177,6 +239,8 @@ export default function SequenceEditor() {
         selectedEdgeId={selectedEdgeId}
         setNodes={setNodes}
         setEdges={setEdges}
+        bomId={bomId}
+        spec={spec}
       />
     </div>
   );

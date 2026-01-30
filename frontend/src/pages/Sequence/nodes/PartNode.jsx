@@ -2,7 +2,7 @@ import React from "react";
 import { Handle, Position } from "@xyflow/react";
 
 export default function PartNode({ data, selected }) {
-  const { partId, inhouse, statusLabel } = data;
+  const { partBase,PartId, inhouse, statusLabel } = data;
 
   return (
     <div
@@ -43,7 +43,7 @@ export default function PartNode({ data, selected }) {
           {inhouse ? "IN" : "OUT"}
         </div>
       </div>
-
+      
       {/* Body */}
       <div style={{ padding: "6px 8px" }}>
         <div
@@ -53,9 +53,9 @@ export default function PartNode({ data, selected }) {
             overflow: "hidden",
             textOverflow: "ellipsis",
           }}
-          title={partId}
+          title={data.partBase ?? data.partId}
         >
-          {partId}
+          {data.partBase ?? data.partId}
         </div>
 
         {statusLabel && (
