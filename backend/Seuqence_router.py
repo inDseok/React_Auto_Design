@@ -348,7 +348,7 @@ def get_part_options(
 
 @router.get("/load")
 def load_sequence(bomId: str, spec: str):
-    path = DATA_DIR / "bom_runs" / bomId / f"{spec}_sequence.json"
+    path = DATA_DIR / "data"/ "bom_runs" / bomId / f"{spec}_sequence.json"
 
     if not path.exists():
         raise HTTPException(404, "시퀀스 파일 없음")
@@ -361,7 +361,7 @@ def save_sequence(req: SequenceSaveRequest):
     bom_id = req.bomId
     spec = req.spec
 
-    save_dir = DATA_DIR / "bom_runs" / bom_id
+    save_dir = DATA_DIR / "data"/ "bom_runs" / bom_id
     save_dir.mkdir(parents=True, exist_ok=True)
 
     save_path = save_dir / f"{spec}_sequence.json"
