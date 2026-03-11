@@ -14,11 +14,25 @@ import { useSearchParams } from "react-router-dom";
 
 const API_BASE = "http://localhost:8000/api/assembly";
 
+function formatDecimalCell(value) {
+  if (value === "" || value === null || value === undefined) return "";
+  const num = Number(value);
+  if (!Number.isFinite(num)) return value;
+  return num.toFixed(2);
+}
+
+function normalizeAssemblyRow(row) {
+  return {
+    ...row,
+    "SEC": formatDecimalCell(row["SEC"]),
+    "TOTAL": formatDecimalCell(row["TOTAL"]),
+  };
+}
+
 function AssemblyPage() {
   const [selectedSheet, setSelectedSheet] = useState("");
   const [selectedPart, setSelectedPart] = useState("");
   const [selectedOption, setSelectedOption] = useState("");
-  
   const [rows, setRows] = useState([]);
 
   const {
@@ -62,9 +76,10 @@ function AssemblyPage() {
           if (session.ok) {
             const saved = await loadSavedRows(bomId, spec);
             if (saved.length > 0) {
-              const restored = saved.map((row) => ({
+              const restored = saved.map((row) => normalizeAssemblyRow({
                 ...row,
-                __groupKey: row["부품 기준"],
+                __groupKey: row.__groupKey || row["부품 기준"],
+                __groupLabel: row.__groupLabel || row.__sequenceGroupLabel || "",
                 __isNew: false,
               }));
               setRows(restored);
@@ -123,7 +138,7 @@ function AssemblyPage() {
       return;
     }
 
-    const newRows = tasks.map((t) => ({
+    const newRows = tasks.map((t) => normalizeAssemblyRow({
       id: crypto.randomUUID(),
 
       // 엑셀 원본 컬럼 그대로
@@ -165,6 +180,25 @@ function AssemblyPage() {
     setRows((prev) => {
       const target = prev.find((r) => r.id === rowId);
       if (!target) return prev;
+
+      if (
+        field === "반복횟수" &&
+        target["부품 기준"] !== "" &&
+        target["부품 기준"] !== null &&
+        target["부품 기준"] !== undefined
+      ) {
+        return prev.map((r) => {
+          if (r["부품 기준"] !== target["부품 기준"]) {
+            return r;
+          }
+
+          const updated = { ...r, [field]: value };
+          const sec = Number(updated["SEC"]) || 0;
+          const cnt = Number(updated["반복횟수"]) || 0;
+          updated["TOTAL"] = sec * cnt;
+          return updated;
+        });
+      }
   
       // 작업자 컬럼: 값 입력일 때만 그룹 전파
       if (
@@ -207,12 +241,13 @@ function AssemblyPage() {
     }
     
 
-      const autoRows = added.map((row) => ({
+      const autoRows = added.map((row) => normalizeAssemblyRow({
         id: crypto.randomUUID(),
         ...row,
-        __groupKey: row["부품 기준"],
+        __groupKey: row.__groupKey || row["부품 기준"],
+        __groupLabel: row.__groupLabel || row.__sequenceGroupLabel || "",
         __isNew: false,
-    }));
+      }));
   
     setRows((prev) => [...prev, ...autoRows]);
   };
@@ -226,6 +261,16 @@ function AssemblyPage() {
   
   const handleDeleteOptionGroup = (partKey, optionValue) => {
     setRows((prev) => deleteOptionGroup(prev, partKey, optionValue));
+  };
+
+  const handleGroupLabelChange = (groupKey, value) => {
+    setRows((prev) =>
+      prev.map((row) =>
+        row.__groupKey === groupKey
+          ? { ...row, __groupLabel: value }
+          : row
+      )
+    );
   };
   
   return (
@@ -257,6 +302,7 @@ function AssemblyPage() {
         onCellChange={handleCellChange}
         onRowsChange={(nextRows) => setRows(nextRows)}
         onDeleteOptionGroup={handleDeleteOptionGroup}
+        onGroupLabelChange={handleGroupLabelChange}
       />
 
     </div>

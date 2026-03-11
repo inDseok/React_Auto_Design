@@ -107,7 +107,6 @@ export function useAssemblyData() {
     try {
       const cleanedRows = rows.map((row) => {
         const {
-          __groupKey,
           __isNew,
           __rowspan,
           __groupIndex,

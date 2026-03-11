@@ -34,6 +34,11 @@ export default function SequenceEditor() {
   const [loadingParts, setLoadingParts] = useState(false);
   const [loadingProcesses, setLoadingProcesses] = useState(false);
   const [error, setError] = useState(null);
+  const [manualOpen, setManualOpen] = useState(true);
+  const [manualSheets, setManualSheets] = useState([]);
+  const [manualPartBases, setManualPartBases] = useState([]);
+  const [manualSheet, setManualSheet] = useState("");
+  const [manualPartBase, setManualPartBase] = useState("");
 
   // ===============================
   // Helpers
@@ -42,6 +47,35 @@ export default function SequenceEditor() {
     setSelectedNodeId(null);
     setSelectedEdgeId(null);
   }, []);
+
+  const addManualPartNode = useCallback(() => {
+    if (!manualSheet || !manualPartBase) {
+      alert("시트, 부품 기준을 모두 선택하세요.");
+      return;
+    }
+
+    setNodes((prev) => [
+      ...prev,
+      {
+        id: `N-${Date.now()}`,
+        type: "PART",
+        position: {
+          x: 120 + (prev.length % 4) * 220,
+          y: 120 + Math.floor(prev.length / 4) * 120,
+        },
+        data: {
+          partId: manualPartBase,
+          partName: manualPartBase,
+          inhouse: true,
+          partBase: manualPartBase,
+          sourceSheet: manualSheet,
+          option: "",
+          statusLabel: "",
+          label: manualPartBase,
+        },
+      },
+    ]);
+  }, [manualSheet, manualPartBase, setNodes]);
 
   // ===============================
   // PROCESS templates 로드
@@ -78,6 +112,69 @@ export default function SequenceEditor() {
       cancelled = true;
     };
   }, [bomId, spec]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    fetch("http://localhost:8000/api/assembly/sheets", {
+      credentials: "include",
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error("시트 로딩 실패");
+        return res.json();
+      })
+      .then((data) => {
+        if (!cancelled) {
+          setManualSheets(Array.isArray(data) ? data : []);
+        }
+      })
+      .catch((err) => {
+        console.error(err);
+        if (!cancelled) setManualSheets([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!manualSheet) {
+      setManualPartBases([]);
+      setManualPartBase("");
+      return;
+    }
+
+    let cancelled = false;
+
+    fetch(
+      `http://localhost:8000/api/assembly/part-bases?sheet=${encodeURIComponent(
+        manualSheet
+      )}`,
+      { credentials: "include" }
+    )
+      .then((res) => {
+        if (!res.ok) throw new Error("부품 기준 로딩 실패");
+        return res.json();
+      })
+      .then((data) => {
+        if (!cancelled) {
+          setManualPartBases(Array.isArray(data) ? data : []);
+          setManualPartBase("");
+        }
+      })
+      .catch((err) => {
+        console.error(err);
+        if (!cancelled) {
+          setManualPartBases([]);
+          setManualPartBase("");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [manualSheet]);
 
   // ===============================
   // inhouse PART 로드
@@ -171,6 +268,7 @@ export default function SequenceEditor() {
       style={{
         height: "calc(100vh - 80px)",
         display: "flex",
+        flexDirection: "column",
         gap: 12,
         padding: 12,
         boxSizing: "border-box",
@@ -180,68 +278,175 @@ export default function SequenceEditor() {
         // clearSelection();
       }}
     >
-      {/* ===============================
-          Left : Palette
-         =============================== */}
       <div
         style={{
-          width: 320,
-          minWidth: 320,
-          height: "100%",
-          overflow: "auto",
           border: "1px solid #e5e7eb",
           borderRadius: 10,
           background: "#fff",
+          overflow: "hidden",
+          flexShrink: 0,
         }}
       >
-        <SequencePalette
-          parts={inhouseParts}
-          processes={processTemplates}
-          loading={loading}
-          error={error}
-        />
+        <button
+          type="button"
+          onClick={() => setManualOpen((prev) => !prev)}
+          style={{
+            width: "100%",
+            border: 0,
+            background: "#f8fafc",
+            padding: "12px 14px",
+            fontSize: 14,
+            fontWeight: 600,
+            textAlign: "left",
+            cursor: "pointer",
+          }}
+        >
+          수동 부품 추가 {manualOpen ? "▾" : "▸"}
+        </button>
+
+        {manualOpen && (
+          <div
+            style={{
+              display: "flex",
+              gap: 12,
+              alignItems: "center",
+              flexWrap: "wrap",
+              padding: 12,
+              borderTop: "1px solid #e5e7eb",
+            }}
+          >
+            <select
+              value={manualSheet}
+              onChange={(e) => setManualSheet(e.target.value)}
+              style={selectStyle}
+            >
+              <option value="">시트 선택</option>
+              {manualSheets.map((sheet) => (
+                <option key={sheet} value={sheet}>
+                  {sheet}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={manualPartBase}
+              onChange={(e) => setManualPartBase(e.target.value)}
+              disabled={!manualSheet}
+              style={selectStyle}
+            >
+              <option value="">부품 기준 선택</option>
+              {manualPartBases.map((part) => (
+                <option key={part} value={part}>
+                  {part}
+                </option>
+              ))}
+            </select>
+
+            <button
+              type="button"
+              onClick={addManualPartNode}
+              disabled={!manualSheet || !manualPartBase}
+              style={actionButtonStyle}
+            >
+              노드 추가
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* ===============================
-          Center : Canvas
-         =============================== */}
       <div
         style={{
           flex: 1,
-          height: "100%",
-          border: "1px solid #e5e7eb",
-          borderRadius: 10,
-          overflow: "hidden",
-          background: "#fff",
-          minWidth: 0,
+          minHeight: 0,
+          display: "flex",
+          gap: 12,
         }}
       >
-        <SequenceCanvas
+        {/* ===============================
+            Left : Palette
+           =============================== */}
+        <div
+          style={{
+            width: 320,
+            minWidth: 320,
+            height: "100%",
+            overflow: "auto",
+            border: "1px solid #e5e7eb",
+            borderRadius: 10,
+            background: "#fff",
+          }}
+        >
+          <SequencePalette
+            parts={inhouseParts}
+            processes={processTemplates}
+            loading={loading}
+            error={error}
+          />
+        </div>
+
+        {/* ===============================
+            Center : Canvas
+           =============================== */}
+        <div
+          style={{
+            flex: 1,
+            height: "100%",
+            border: "1px solid #e5e7eb",
+            borderRadius: 10,
+            overflow: "hidden",
+            background: "#fff",
+            minWidth: 0,
+          }}
+        >
+          <SequenceCanvas
+            nodes={nodes}
+            edges={edges}
+            groups={groups}
+            setNodes={setNodes}
+            setEdges={setEdges}
+            setGroups={setGroups}
+            onSelectNode={setSelectedNodeId}
+            onSelectEdge={setSelectedEdgeId}
+            onKeyDown={onKeyDown}
+          />
+        </div>
+
+        {/* ===============================
+            Right : Inspector
+           =============================== */}
+        <SequenceInspector
           nodes={nodes}
           edges={edges}
           groups={groups}
+          setGroups={setGroups}
+          selectedNodeId={selectedNodeId}
+          selectedEdgeId={selectedEdgeId}
           setNodes={setNodes}
           setEdges={setEdges}
-          setGroups={setGroups}
-          onSelectNode={setSelectedNodeId}
-          onSelectEdge={setSelectedEdgeId}
-          onKeyDown={onKeyDown}
+          bomId={bomId}
+          spec={spec}
         />
       </div>
-
-      {/* ===============================
-          Right : Inspector
-         =============================== */}
-      <SequenceInspector
-        nodes={nodes}
-        edges={edges}
-        selectedNodeId={selectedNodeId}
-        selectedEdgeId={selectedEdgeId}
-        setNodes={setNodes}
-        setEdges={setEdges}
-        bomId={bomId}
-        spec={spec}
-      />
     </div>
   );
 }
+
+const selectStyle = {
+  minWidth: 220,
+  padding: "8px 10px",
+  borderRadius: 8,
+  border: "1px solid #cbd5e1",
+  background: "#fff",
+  fontSize: 13,
+};
+
+const actionButtonStyle = {
+  padding: "8px 14px",
+  borderRadius: 8,
+  border: 0,
+  background: "#2563eb",
+  color: "#fff",
+  fontSize: 13,
+  fontWeight: 600,
+  cursor: "pointer",
+};

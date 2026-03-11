@@ -141,6 +141,7 @@ export default function SequenceInspector({
           spec,
           nodes: safeNodes,
           edges,
+          groups,
         }),
       });
   
@@ -181,6 +182,7 @@ export default function SequenceInspector({
   
       setNodes(safeNodes);
       setEdges(data.edges || []);
+      setGroups?.(data.groups || []);
   
       alert("시퀀스 불러오기 완료");
     } catch (e) {
@@ -206,22 +208,7 @@ export default function SequenceInspector({
           borderBottom: "1px solid #e5e7eb",
         }}
       >
-        <button
-          onClick={async () => {
-            await fetch(`${API_BASE}/api/sequence/save`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              credentials: "include",
-              body: JSON.stringify({
-                bomId,
-                spec,
-                nodes,
-                edges,
-                groups, // ✅ 핵심
-              }),
-            });
-          }}
-        >
+        <button onClick={saveSequence}>
           저장
         </button>
         <button onClick={loadSequence}>불러오기</button>
@@ -298,21 +285,18 @@ export default function SequenceInspector({
               </select>
             )}
   
-            {type === "PROCESS" && (
+            {(type === "PART" || type === "PROCESS") && (
               <>
                 <Label>반복 횟수 가중치</Label>
                 <input
                   type="number"
                   min={1}
-                  step={1}
+                  step={0.01}
                   style={inputStyle}
                   value={data.repeatWeight ?? 1}
                   onChange={(e) =>
                     updateNodeData({
-                      repeatWeight: Math.max(
-                        1,
-                        Number(e.target.value)
-                      ),
+                      repeatWeight: Math.max(1, Number(e.target.value || 0)),
                     })
                   }
                 />

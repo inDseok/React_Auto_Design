@@ -67,6 +67,13 @@ export function insertNewGroupRow(rows, targetRowId) {
 // rowActions.js
 import { computeRowspanInfo } from "./groupUtils";
 
+function formatDecimalCell(value) {
+  if (value === "" || value === null || value === undefined) return "";
+  const num = Number(value);
+  if (!Number.isFinite(num)) return value;
+  return num.toFixed(2);
+}
+
 export function deleteRow(rows, targetRowId) {
   const idx = rows.findIndex((r) => r.id === targetRowId);
   if (idx === -1) return rows;
@@ -141,11 +148,15 @@ export function updateCell(rows, rowId, field, value) {
 
     const updated = { ...row, [field]: value };
 
+    if (field === "SEC" || field === "TOTAL") {
+      updated[field] = formatDecimalCell(value);
+    }
+
     // SEC / 반복횟수 변경 시에만 TOTAL 자동 갱신
     if (field === "SEC" || field === "반복횟수") {
       const sec = Number(updated["SEC"]) || 0;
       const cnt = Number(updated["반복횟수"]) || 0;
-      updated["TOTAL"] = sec * cnt;
+      updated["TOTAL"] = (sec * cnt).toFixed(2);
     }
 
     // TOTAL 직접 수정 가능

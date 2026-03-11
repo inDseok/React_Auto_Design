@@ -11,6 +11,8 @@ export function computeRowspanInfo(rows) {
   const result = rows.map((r) => ({ ...r }));
   const columns = ["부품 기준", "요소작업", "OPTION"];
 
+  const getMergeUnitKey = (row) => row.__partInstanceKey ?? row["부품 기준"] ?? null;
+
   // 1) 값 상속: 같은 그룹(__groupKey) 안에서만, __isNew 제외
   for (const col of columns) {
     let lastValue = null;
@@ -68,6 +70,7 @@ export function computeRowspanInfo(rows) {
       }
 
       const baseGroupKey = row.__groupKey ?? null;
+      const baseMergeUnitKey = getMergeUnitKey(row);
 
       let j = i + 1;
       while (j < result.length) {
@@ -79,8 +82,17 @@ export function computeRowspanInfo(rows) {
         // 그룹이 바뀌면 병합 경계
         if ((next.__groupKey ?? null) !== baseGroupKey) break;
 
+        // 같은 시퀀스 그룹 안이라도 노드 인스턴스가 다르면 병합하지 않음
+        if (getMergeUnitKey(next) !== baseMergeUnitKey) break;
+
         // 값이 다르면 병합 경계
         if (next[col] !== row[col]) break;
+
+        // 요소작업/OPTION은 부품 기준이 다르면 병합하지 않음
+        if (
+          (col === "요소작업" || col === "OPTION") &&
+          next["부품 기준"] !== row["부품 기준"]
+        ) break;
 
         j += 1;
       }

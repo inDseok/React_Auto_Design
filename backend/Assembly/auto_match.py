@@ -27,6 +27,7 @@ EXCEL_HEADER_ROW = 1
 ONLY_INHOUSE = True
 TOPK = 5
 JW_THRESHOLD = 90.0
+EXCLUDED_MATCH_SHEETS = {"대형램프 DB"}
 
 STOP_TOKENS = {
     "LH", "RH", "STD", "ECE", "LHD", "RHD", "LD", "HD", "EC",
@@ -141,6 +142,9 @@ def load_db_rows(excel_path: Path) -> Tuple[List[Dict[str, Any]], List[str]]:
     db_rows: List[Dict[str, Any]] = []
 
     for sheet in xls.sheet_names:
+        if sheet in EXCLUDED_MATCH_SHEETS:
+            continue
+
         df = pd.read_excel(excel_path, sheet_name=sheet, header=EXCEL_HEADER_ROW)
 
         part_col = find_part_col(df.columns)

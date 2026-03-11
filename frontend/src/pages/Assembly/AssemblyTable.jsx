@@ -42,6 +42,27 @@ function arrayMoveImmutable(array, fromIndex, toIndex) {
   return copy;
 }
 
+function toNumber(value) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : 0;
+  }
+  if (typeof value === "string") {
+    const n = Number(value.replace(/,/g, "").trim());
+    return Number.isFinite(n) ? n : 0;
+  }
+  return 0;
+}
+
+function formatNumber(value) {
+  const rounded = Math.round(value * 100) / 100;
+  return Number.isFinite(rounded)
+    ? rounded.toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })
+    : "0.00";
+}
+
 function computeDropIndexFromPointer(groupOrder, groupRects, activeId, overId, pointerY) {
   // overId 기준으로 위/아래 절반 판단해서 drop index 계산
   const overIndex = groupOrder.indexOf(overId);
@@ -97,6 +118,7 @@ export default function AssemblyTable({
   onCellChange,
   onRowsChange,
   onDeleteOptionGroup,
+  onGroupLabelChange,
 }) {
 
   const columns = [
@@ -153,6 +175,31 @@ export default function AssemblyTable({
   const groupOrder = useMemo(() => buildGroupOrder(processedRows), [processedRows]);
   const groupRowsMap = useMemo(() => buildGroupRowsMap(processedRows), [processedRows]);
 
+  const groupSums = useMemo(() => {
+    const sums = new Map();
+    for (const gk of groupOrder) {
+      const list = groupRowsMap.get(gk) || [];
+      let secSum = 0;
+      let totalSum = 0;
+      for (const row of list) {
+        secSum += toNumber(row["SEC"]);
+        totalSum += toNumber(row["TOTAL"]);
+      }
+      sums.set(gk, { secSum, totalSum });
+    }
+    return sums;
+  }, [groupOrder, groupRowsMap]);
+
+  const grandSums = useMemo(() => {
+    let secSum = 0;
+    let totalSum = 0;
+    for (const row of processedRows) {
+      secSum += toNumber(row["SEC"]);
+      totalSum += toNumber(row["TOTAL"]);
+    }
+    return { secSum, totalSum };
+  }, [processedRows]);
+
   // 그룹 rect 등록용 ref 콜백 생성
   const registerGroupRect = (groupKey) => (el) => {
     if (!el) return;
@@ -192,6 +239,80 @@ export default function AssemblyTable({
       onInput={(e) => {
         e.target.style.height = "auto";
         e.target.style.height = e.target.scrollHeight + "px";
+      }}
+    />
+  );
+
+  const renderGroupLabelInput = (groupKey, value) => (
+    <textarea
+      value={value || ""}
+      onChange={(e) => onGroupLabelChange?.(groupKey, e.target.value)}
+      placeholder="그룹 이름"
+      rows={1}
+      style={{
+        width: "100%",
+        resize: "none",
+        overflow: "hidden",
+        border: "1px solid transparent",
+        outline: "none",
+        background: "transparent",
+        padding: "6px 6px",
+        fontSize: 13.5,
+        lineHeight: "20px",
+        wordBreak: "break-word",
+        minHeight: 28,
+        textAlign: "center",
+      }}
+      ref={(el) => {
+        if (el) {
+          el.style.height = "auto";
+          el.style.height = el.scrollHeight + "px";
+        }
+      }}
+      onInput={(e) => {
+        e.target.style.height = "auto";
+        e.target.style.height = e.target.scrollHeight + "px";
+      }}
+    />
+  );
+
+  const renderNumberInput = (row, col, { step = "0.01", min } = {}) => (
+    <input
+      type="number"
+      value={row[col] ?? ""}
+      step={step}
+      min={min}
+      onChange={(e) => onCellChange(row.id, col, e.target.value)}
+      style={{
+        width: "100%",
+        boxSizing: "border-box",
+        border: "1px solid transparent",
+        outline: "none",
+        background: "transparent",
+        padding: "6px 6px",
+        fontSize: 13.5,
+        lineHeight: "20px",
+        minHeight: 28,
+      }}
+    />
+  );
+
+  const renderDecimalInput = (row, col) => (
+    <input
+      type="text"
+      inputMode="decimal"
+      value={row[col] ?? ""}
+      onChange={(e) => onCellChange(row.id, col, e.target.value)}
+      style={{
+        width: "100%",
+        boxSizing: "border-box",
+        border: "1px solid transparent",
+        outline: "none",
+        background: "transparent",
+        padding: "6px 6px",
+        fontSize: 13.5,
+        lineHeight: "20px",
+        minHeight: 28,
       }}
     />
   );
@@ -336,7 +457,8 @@ export default function AssemblyTable({
             {groupOrder.map((gk) => {
               const rowsInGroup = groupRowsMap.get(gk) || [];
               if (rowsInGroup.length === 0) return null;
-
+              const sum = groupSums.get(gk) || { secSum: 0, totalSum: 0 };
+              const groupLabel = rowsInGroup[0]?.__groupLabel || rowsInGroup[0]?.__sequenceGroupLabel || "";
               return (
                 <DroppableGroupTbody
                   key={gk}
@@ -370,16 +492,95 @@ export default function AssemblyTable({
                         </td>
                       )}
 
-                      {["작업자", "no", "동작요소", "반복횟수", "SEC", "TOTAL"].map((col) => (
+                      {["작업자", "no", "동작요소"].map((col) => (
                         <td key={col} style={cellStyle()}>
                           {renderTextarea(row, col)}
                         </td>
                       ))}
+                      <td style={cellStyle()}>
+                        {renderNumberInput(row, "반복횟수")}
+                      </td>
+                      <td style={cellStyle()}>
+                        {renderDecimalInput(row, "SEC")}
+                      </td>
+                      <td style={cellStyle()}>
+                        {renderDecimalInput(row, "TOTAL")}
+                      </td>
                     </tr>
                   ))}
+                  <tr>
+                    <td
+                      colSpan={4}
+                      style={{
+                        ...cellStyle(true),
+                        background: "#f8fafc",
+                        minWidth: 180,
+                        textAlign: "center",
+                        verticalAlign: "middle",
+                      }}
+                    >
+                      {renderGroupLabelInput(gk, groupLabel)}
+                    </td>
+                    <td
+                      colSpan={3}
+                      style={{
+                        ...cellStyle(true),
+                        textAlign: "right",
+                        background: "#f8fafc",
+                      }}
+                    >
+                      합계
+                    </td>
+                    <td
+                      style={{
+                        ...cellStyle(true),
+                        background: "#f8fafc",
+                      }}
+                    >
+                      {formatNumber(sum.secSum)}
+                    </td>
+                    <td
+                      style={{
+                        ...cellStyle(true),
+                        background: "#f8fafc",
+                      }}
+                    >
+                      {formatNumber(sum.totalSum)}
+                    </td>
+                  </tr>
                 </DroppableGroupTbody>
               );
             })}
+            <tfoot>
+              <tr>
+                <td
+                  colSpan={7}
+                  style={{
+                    ...cellStyle(true),
+                    textAlign: "right",
+                    background: "#eef2ff",
+                  }}
+                >
+                  전체 합계
+                </td>
+                <td
+                  style={{
+                    ...cellStyle(true),
+                    background: "#eef2ff",
+                  }}
+                >
+                  {formatNumber(grandSums.secSum)}
+                </td>
+                <td
+                  style={{
+                    ...cellStyle(true),
+                    background: "#eef2ff",
+                  }}
+                >
+                  {formatNumber(grandSums.totalSum)}
+                </td>
+              </tr>
+            </tfoot>
           </table>
 
           <DragOverlay>

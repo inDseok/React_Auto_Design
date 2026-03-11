@@ -75,13 +75,22 @@ def get_inhouse_parts(bomId: str, spec: str):
         part_id = n.get("id")
         part_name = n.get("name") or part_id
 
-        # ⚠️ Sequence 용도이므로 "name" 기준으로 매칭
-        best = match_one_best(
-            query_raw=part_id,
-            db_rows=db_rows,
-            db_choices=db_choices,
-            topk=TOPK,
-        )
+        # Sequence에서는 사용자가 SUB에서 바꾼 이름을 우선 매칭 기준으로 사용한다.
+        best = None
+        for query_raw in [part_name, part_id]:
+            if not query_raw:
+                continue
+
+            candidate = match_one_best(
+                query_raw=query_raw,
+                db_rows=db_rows,
+                db_choices=db_choices,
+                topk=TOPK,
+            )
+
+            if candidate and candidate["score_jw"] >= JW_THRESHOLD:
+                best = candidate
+                break
 
         if best and best["score_jw"] >= JW_THRESHOLD:
             part_base = best["db_part_raw"]
@@ -121,6 +130,25 @@ def get_inhouse_parts(bomId: str, spec: str):
 
 
 EXCEL_DB_PATH = Path("backend/작업시간분석표DB.xlsx")
+
+
+def collect_options_for_part(ws, part_col: int, option_col: int, header_row: int, part_base: str):
+    options = set()
+    current_part = None
+
+    for row in range(header_row + 1, ws.max_row + 1):
+        p = ws.cell(row=row, column=part_col).value
+        if p is not None and str(p).strip():
+            current_part = str(p).strip()
+
+        if current_part != part_base:
+            continue
+
+        opt = ws.cell(row=row, column=option_col).value
+        if opt is not None and str(opt).strip():
+            options.add(str(opt).strip())
+
+    return sorted(options)
 
 @router.get("/process-templates")
 def get_process_templates():
@@ -250,24 +278,18 @@ def get_options(
             "options": [],
         }
 
-    options = set()
-
-    for row in range(header_row + 1, ws.max_row + 1):
-        p = ws.cell(row=row, column=part_col).value
-        if not p:
-            continue
-
-        if str(p).strip() != part_base:
-            continue
-
-        opt = ws.cell(row=row, column=option_col).value
-        if opt:
-            options.add(str(opt).strip())
+    options = collect_options_for_part(
+        ws=ws,
+        part_col=part_col,
+        option_col=option_col,
+        header_row=header_row,
+        part_base=part_base,
+    )
 
     return {
         "partBase": part_base,
         "sourceSheet": source_sheet,
-        "options": sorted(options),
+        "options": options,
     }
 
 @router.get("/part/options")
@@ -325,24 +347,18 @@ def get_part_options(
             "count": 0,
         }
 
-    options = set()
-
-    for row in range(header_row + 1, ws.max_row + 1):
-        p = ws.cell(row=row, column=part_col).value
-        if not p:
-            continue
-
-        if str(p).strip() != part_base:
-            continue
-
-        opt = ws.cell(row=row, column=option_col).value
-        if opt:
-            options.add(str(opt).strip())
+    options = collect_options_for_part(
+        ws=ws,
+        part_col=part_col,
+        option_col=option_col,
+        header_row=header_row,
+        part_base=part_base,
+    )
 
     return {
         "partBase": part_base,
         "sourceSheet": source_sheet,
-        "options": sorted(options),
+        "options": options,
         "count": len(options),
     }
 
