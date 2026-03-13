@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Any
+from functools import lru_cache
 
 import json
 from uuid import uuid4
@@ -15,7 +16,7 @@ from pathlib import Path
 
 from backend.models import SubNodePatch, SubTree, MoveNodeRequest, SubNode, NodeType
 from backend.Sub.bom_service import create_bom_run
-from backend.Sub.utills import  load_tree_json, save_tree_json, read_bom_meta
+from backend.Sub.utills import load_tree_json, save_tree_json, read_bom_meta, read_spec_meta
 from backend.Sub.excel_loader import build_tree_from_sheet
 from typing import Optional
 from openpyxl import load_workbook
@@ -23,6 +24,7 @@ from backend.Sub.session_store import get_or_create_sid, refresh_session_state, 
 
 from backend.Sub.json_to_excel import export_tree_excel_from_json
 from pathlib import Path
+from backend.Assembly.auto_match import load_db_rows, normalize_text, rf_score, jw_score
 
 sub_router = APIRouter(prefix="/sub", tags=["SUB API"])
 
@@ -30,6 +32,63 @@ sub_router = APIRouter(prefix="/sub", tags=["SUB API"])
 BASE_DIR = Path(__file__).resolve().parents[1]   # backend
 DATA_DIR = BASE_DIR / "backend" /"data"
 SESSION_STORE_PATH = DATA_DIR / "session_state.json"
+ASSEMBLY_DB_PATH = BASE_DIR / "backend" / "작업시간분석표DB.xlsx"
+
+
+@lru_cache(maxsize=4)
+def _get_cached_db_rows(excel_path_str: str, mtime: float):
+    return load_db_rows(Path(excel_path_str))
+
+
+def _get_part_suggestions(query_values: List[str], limit: int = 5) -> List[Dict[str, Any]]:
+    if not ASSEMBLY_DB_PATH.exists():
+        raise HTTPException(status_code=500, detail=f"작업시간 분석표 DB 엑셀 없음: {ASSEMBLY_DB_PATH}")
+
+    db_rows, db_choices = _get_cached_db_rows(
+        str(ASSEMBLY_DB_PATH.resolve()),
+        ASSEMBLY_DB_PATH.stat().st_mtime,
+    )
+
+    suggestions: Dict[str, Dict[str, Any]] = {}
+
+    for query_raw in query_values:
+        normalized_query = normalize_text(query_raw)
+        if not normalized_query:
+            continue
+
+        for index, choice_norm in enumerate(db_choices):
+            rf = rf_score(normalized_query, choice_norm)
+            jw = jw_score(normalized_query, choice_norm)
+            combined = round((rf * 0.45) + (jw * 0.55), 2)
+            meta = db_rows[index]
+            key = f"{meta['db_part_raw']}::{meta['sheet']}"
+
+            previous = suggestions.get(key)
+            candidate = {
+                "query": query_raw,
+                "db_part_raw": meta["db_part_raw"],
+                "db_part_norm": meta["db_part_norm"],
+                "sheet": meta["sheet"],
+                "row_index": meta["row_index"],
+                "score_rapidfuzz": round(rf, 2),
+                "score_jaro_winkler": round(jw, 2),
+                "score_combined": combined,
+            }
+
+            if previous is None or candidate["score_combined"] > previous["score_combined"]:
+                suggestions[key] = candidate
+
+    ranked = sorted(
+        suggestions.values(),
+        key=lambda item: (
+            item["score_combined"],
+            item["score_jaro_winkler"],
+            item["score_rapidfuzz"],
+        ),
+        reverse=True,
+    )
+
+    return ranked[:limit]
 
 @sub_router.post("/bom/upload")
 async def upload_bom(file: UploadFile = File(...)):
@@ -60,6 +119,23 @@ async def upload_bom(file: UploadFile = File(...)):
 @sub_router.get("/bom/{bom_id}/specs")
 def list_specs(bom_id: str):
     root = DATA_DIR / "bom_runs" / bom_id
+    spec_meta = read_spec_meta(root)
+
+    sheets = spec_meta.get("spec_info", {}).get("sheets", [])
+    if isinstance(sheets, list) and sheets:
+        specs = []
+        for sheet in sheets:
+            spec_items = sheet.get("specs", [])
+            if not isinstance(spec_items, list):
+                continue
+            for item in spec_items:
+                spec_name = item.get("spec_name")
+                if spec_name:
+                    specs.append(str(spec_name))
+
+        if specs:
+            return specs
+
     tree_excel = root / "tree.xlsx"
 
     if not tree_excel.exists():
@@ -86,6 +162,27 @@ def list_specs(bom_id: str):
         )
 
     return specs
+
+
+@sub_router.get("/bom/{bom_id}/part-suggestions")
+def get_part_suggestions(
+    bom_id: str,
+    spec: str,
+    name: Optional[str] = None,
+    part_no: Optional[str] = None,
+    limit: int = 5,
+):
+    root_dir = DATA_DIR / "bom_runs" / bom_id
+    json_path = root_dir / f"{spec}.json"
+
+    if not json_path.exists():
+        raise HTTPException(status_code=404, detail=f"트리 JSON이 없습니다: {json_path}")
+
+    query_values = [value for value in [name, part_no] if value and str(value).strip()]
+    if not query_values:
+        return {"items": []}
+
+    return {"items": _get_part_suggestions(query_values, max(1, min(limit, 10)))}
 
 @sub_router.get("/bom/{bom_id}/tree", response_model=SubTree)
 def get_tree(
@@ -165,18 +262,19 @@ def patch_node(
     patch: SubNodePatch,
     request: Request,
     response: Response,
+    spec: Optional[str] = None,
 ):
     sid = get_or_create_sid(request, response)
     refresh_session_state()
     state = SESSION_STATE.get(sid, {})
 
-    spec = state.get("spec")
-    if not spec:
+    resolved_spec = spec or state.get("spec")
+    if not resolved_spec:
         raise HTTPException(status_code=400, detail="spec 없음")
 
     root_dir = DATA_DIR / "bom_runs" / bom_id
 
-    tree = load_tree_json(root_dir, spec)
+    tree = load_tree_json(root_dir, resolved_spec)
     nodes = tree.nodes
 
     # 1️⃣ 기존 id 로 노드 찾기
@@ -222,7 +320,7 @@ def patch_node(
         for child in descendants:
             child.type = NodeType.SUB
 
-    save_tree_json(root_dir, spec, tree)
+    save_tree_json(root_dir, resolved_spec, tree)
 
     return tree
 
@@ -362,6 +460,9 @@ def create_node(
         material=material,
         qty=qty,
         inhouse=False,
+        recommended_part_base=None,
+        recommended_source_sheet=None,
+        recommended_match_score=None,
     )
 
     nodes.append(new_node)
@@ -479,7 +580,10 @@ def add_node(
         part_no=body.part_no,
         material=body.material,
         qty=body.qty,
-        inhouse = body.inhouse if body.inhouse is not None else False
+        inhouse = body.inhouse if body.inhouse is not None else False,
+        recommended_part_base=None,
+        recommended_source_sheet=None,
+        recommended_match_score=None,
     )
 
     # 5️⃣ 추가

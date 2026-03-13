@@ -5,8 +5,8 @@ import { AppProvider } from "./state/AppContext";
 
 import Layout from "./template/Layout";
 import SubPage from "./pages/Sub/SubPage";
-import TimePage from "./pages/TimePage";
-import LobPage from "./pages/LobPage";
+import TimePage from "./pages/Time/TimePage";
+import LobPage from "./pages/Lob/LobPage";
 import AssemblyPage from "./pages/Assembly/AssemblyPage";
 import SequencePage from "./pages/Sequence/SequencePage";
 

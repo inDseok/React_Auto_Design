@@ -2,8 +2,9 @@ import React, { useEffect, useState } from "react";
 import AssemblySelector from "./AssemblySelector";
 import AssemblyTable from "./AssemblyTable";
 import { useAssemblyData } from "./useAssemblyData";
+import { computeRowspanInfo } from "./groupUtils";
 import {
-  insertSameGroupRow, insertNewGroupRow,
+  insertSameGroupRow, insertNewGroupRow, insertNewGroupAt,
   deleteRow,
   deleteGroup,
   updateCell,
@@ -33,6 +34,7 @@ function AssemblyPage() {
   const [selectedSheet, setSelectedSheet] = useState("");
   const [selectedPart, setSelectedPart] = useState("");
   const [selectedOption, setSelectedOption] = useState("");
+  const [selectedInsertPosition, setSelectedInsertPosition] = useState("end");
   const [rows, setRows] = useState([]);
 
   const {
@@ -54,6 +56,29 @@ function AssemblyPage() {
 
   const { state, actions } = useApp();
 
+  const restoreSavedRows = async () => {
+    if (!bomId || !spec) {
+      alert("BOM 또는 사양 정보가 없습니다.");
+      return;
+    }
+
+    const saved = await loadSavedRows(bomId, spec);
+    if (!saved.length) {
+      alert("저장된 assembly.json 데이터가 없습니다.");
+      return;
+    }
+
+    const restored = saved.map((row) => normalizeAssemblyRow({
+      ...row,
+      __groupKey: row.__groupKey || row["부품 기준"],
+      __groupLabel: row.__groupLabel || row.__sequenceGroupLabel || "",
+      __sourceSheet: row.__sourceSheet || row.sourceSheet || "",
+      __isNew: false,
+    }));
+
+    setRows(restored);
+  };
+
   useEffect(() => {
     if (bomId) actions.setBomContext(bomId);
     if (spec) actions.setSpec(spec);
@@ -74,16 +99,7 @@ function AssemblyPage() {
           const session = await sessionRes.json();
   
           if (session.ok) {
-            const saved = await loadSavedRows(bomId, spec);
-            if (saved.length > 0) {
-              const restored = saved.map((row) => normalizeAssemblyRow({
-                ...row,
-                __groupKey: row.__groupKey || row["부품 기준"],
-                __groupLabel: row.__groupLabel || row.__sequenceGroupLabel || "",
-                __isNew: false,
-              }));
-              setRows(restored);
-            }
+            await restoreSavedRows();
           }
         }
       } catch (e) {
@@ -138,25 +154,50 @@ function AssemblyPage() {
       return;
     }
 
-    const newRows = tasks.map((t) => normalizeAssemblyRow({
-      id: crypto.randomUUID(),
+    setRows((prev) => {
+      const targetGroupKey =
+        selectedInsertPosition === "end" ? crypto.randomUUID() : selectedInsertPosition;
+      const targetGroupLabel =
+        prev.find((row) => row.__groupKey === targetGroupKey)?.__groupLabel || "";
+      const newRows = tasks.map((t) => normalizeAssemblyRow({
+        id: crypto.randomUUID(),
 
-      // 엑셀 원본 컬럼 그대로
-      "부품 기준": t["부품 기준"],
-      "요소작업": t["요소작업"],
-      "OPTION": t["OPTION"],
-      "작업자": t["작업자"],
-      "no": t["no"],
-      "동작요소": t["동작요소"],
-      "반복횟수": t["반복횟수"],
-      "SEC": t["SEC"],
-      "TOTAL": t["TOTAL"],
+        // 엑셀 원본 컬럼 그대로
+        "부품 기준": t["부품 기준"],
+        "요소작업": t["요소작업"],
+        "OPTION": t["OPTION"],
+        "작업자": t["작업자"],
+        "no": t["no"],
+        "동작요소": t["동작요소"],
+        "반복횟수": t["반복횟수"],
+        "SEC": t["SEC"],
+        "TOTAL": t["TOTAL"],
 
-      __groupKey: t["부품 기준"], // ⭐ 그룹 병합 기준
-      __isNew: false,
-    }));
+        __groupKey: targetGroupKey,
+        __groupLabel: targetGroupLabel,
+        __sourceSheet: selectedSheet,
+        __isNew: false,
+      }));
 
-    setRows((prev) => [...prev, ...newRows]);
+      if (selectedInsertPosition === "end") {
+        return [...prev, ...newRows];
+      }
+
+      const lastIndexInGroup = prev.reduce(
+        (lastIndex, row, index) =>
+          row.__groupKey === targetGroupKey ? index : lastIndex,
+        -1
+      );
+
+      if (lastIndexInGroup === -1) {
+        return [...prev, ...newRows];
+      }
+
+      const insertIndex = lastIndexInGroup + 1;
+      const nextRows = [...prev];
+      nextRows.splice(insertIndex, 0, ...newRows);
+      return nextRows;
+    });
   };
 
   // 행 조작
@@ -166,6 +207,10 @@ function AssemblyPage() {
   
   const handleInsertNewGroup = (rowId) => {
     setRows((prev) => insertNewGroupRow(prev, rowId));
+  };
+
+  const handleInsertGroupAt = (insertIndex) => {
+    setRows((prev) => insertNewGroupAt(prev, insertIndex));
   };
   
   const handleDeleteRow = (rowId) => {
@@ -181,24 +226,9 @@ function AssemblyPage() {
       const target = prev.find((r) => r.id === rowId);
       if (!target) return prev;
 
-      if (
-        field === "반복횟수" &&
-        target["부품 기준"] !== "" &&
-        target["부품 기준"] !== null &&
-        target["부품 기준"] !== undefined
-      ) {
-        return prev.map((r) => {
-          if (r["부품 기준"] !== target["부품 기준"]) {
-            return r;
-          }
-
-          const updated = { ...r, [field]: value };
-          const sec = Number(updated["SEC"]) || 0;
-          const cnt = Number(updated["반복횟수"]) || 0;
-          updated["TOTAL"] = sec * cnt;
-          return updated;
-        });
-      }
+      const targetInstanceKey =
+        target.__partInstanceKey ||
+        `${target.__groupKey || ""}::${target["부품 기준"] || ""}::${target["OPTION"] || ""}`;
   
       // 작업자 컬럼: 값 입력일 때만 그룹 전파
       if (
@@ -207,10 +237,11 @@ function AssemblyPage() {
         value !== target[field]      // 실제로 바뀌었고
       ) {
         return prev.map((r) => {
-          if (
-            r["부품 기준"] === target["부품 기준"] &&
-            r["OPTION"] === target["OPTION"]
-          ) {
+          const rowInstanceKey =
+            r.__partInstanceKey ||
+            `${r.__groupKey || ""}::${r["부품 기준"] || ""}::${r["OPTION"] || ""}`;
+
+          if (rowInstanceKey === targetInstanceKey) {
             return { ...r, 작업자: value };
           }
           return r;
@@ -227,6 +258,11 @@ function AssemblyPage() {
 
   // 저장
   const handleSave = async () => {
+    if (!rows.length) {
+      alert("저장할 조립 총공수 데이터가 없습니다.");
+      return;
+    }
+
     const ok = await saveRowsToDB(bomId, spec, rows);
     if (ok) alert("저장 완료");
     else alert("저장 실패");
@@ -246,16 +282,18 @@ function AssemblyPage() {
         ...row,
         __groupKey: row.__groupKey || row["부품 기준"],
         __groupLabel: row.__groupLabel || row.__sequenceGroupLabel || "",
+        __sourceSheet: row.__sourceSheet || row.sourceSheet || "",
         __isNew: false,
       }));
   
-    setRows((prev) => [...prev, ...autoRows]);
+    setRows(autoRows);
   };
   
   const handleReset = () => {
     setSelectedSheet("");
     setSelectedPart("");
     setSelectedOption("");
+    setSelectedInsertPosition("end");
     setRows([]);
   };
   
@@ -272,6 +310,44 @@ function AssemblyPage() {
       )
     );
   };
+
+  const insertPositions = (() => {
+    if (rows.length === 0) {
+      return [{ value: "end", label: "삽입 위치: 맨 뒤" }];
+    }
+
+    const processed = computeRowspanInfo(rows);
+    const positions = [{ value: "end", label: "삽입 위치: 맨 뒤" }];
+    const seen = new Set();
+
+    processed.forEach((row) => {
+      const groupKey = row.__groupKey;
+      if (!groupKey || seen.has(groupKey)) return;
+      seen.add(groupKey);
+
+      const label =
+        row.__groupLabel?.trim() ||
+        row.__sequenceGroupLabel?.trim() ||
+        row["부품 기준"]?.trim() ||
+        `그룹 ${seen.size}`;
+
+      positions.push({
+        value: groupKey,
+        label: `${label}`,
+      });
+    });
+
+    return positions;
+  })();
+
+  useEffect(() => {
+    const hasSelectedPosition = insertPositions.some(
+      (pos) => pos.value === selectedInsertPosition
+    );
+    if (!hasSelectedPosition) {
+      setSelectedInsertPosition(insertPositions[insertPositions.length - 1]?.value ?? "end");
+    }
+  }, [insertPositions, selectedInsertPosition]);
   
   return (
     <div style={{ padding: 20 }}>
@@ -281,22 +357,28 @@ function AssemblyPage() {
         sheets={sheets}
         parts={parts}
         options={options}
+        insertPositions={insertPositions}
         selectedSheet={selectedSheet}
         selectedPart={selectedPart}
         selectedOption={selectedOption}
+        selectedInsertPosition={selectedInsertPosition}
         onChangeSheet={setSelectedSheet}
         onChangePart={setSelectedPart}
         onChangeOption={setSelectedOption}
+        onChangeInsertPosition={setSelectedInsertPosition}
         onAdd={handleAddFromDB}
+        onLoad={restoreSavedRows}
         onSave={handleSave}
         onAutoMatch={handleAutoMatch}
         onReset={handleReset}
+        canSave={rows.length > 0}
       />
 
       <AssemblyTable
         rows={rows}
         onInsertSameGroup={handleInsertSameGroup}
         onInsertNewGroup={handleInsertNewGroup}
+        onInsertGroupAt={handleInsertGroupAt}
         onDeleteRow={handleDeleteRow}
         onDeleteGroup={handleDeleteGroup}
         onCellChange={handleCellChange}

@@ -6,6 +6,7 @@ export default function ProcessNode({ data, selected }) {
     label,        // 공정명
     partBase,     // fallback
     sourceSheet,  // 공통 DB / 표준 동작
+    isAssemblyImported,
   } = data;
 
   const processName = label || partBase || "공정";
@@ -16,10 +17,14 @@ export default function ProcessNode({ data, selected }) {
         width: 200,
         minHeight: 80,
         borderRadius: 8,
-        border: selected ? "2px solid #f97316" : "1px solid #fed7aa",
-        background: "#fff7ed",
+        border: selected
+          ? `2px solid ${isAssemblyImported ? "#7c3aed" : "#f97316"}`
+          : `1px solid ${isAssemblyImported ? "#ddd6fe" : "#fed7aa"}`,
+        background: isAssemblyImported ? "#f5f3ff" : "#fff7ed",
         boxShadow: selected
-          ? "0 0 0 2px rgba(249,115,22,0.2)"
+          ? isAssemblyImported
+            ? "0 0 0 2px rgba(124,58,237,0.2)"
+            : "0 0 0 2px rgba(249,115,22,0.2)"
           : "0 1px 3px rgba(0,0,0,0.1)",
         fontSize: 12,
         position: "relative",
@@ -43,11 +48,11 @@ export default function ProcessNode({ data, selected }) {
               fontSize: 10,
               padding: "2px 6px",
               borderRadius: 6,
-              background: "#fb923c",
+              background: isAssemblyImported ? "#8b5cf6" : "#fb923c",
               color: "#fff",
             }}
           >
-            {sourceSheet}
+            {isAssemblyImported ? "ASM" : sourceSheet}
           </div>
         )}
       </div>

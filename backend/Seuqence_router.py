@@ -3,6 +3,7 @@ from pathlib import Path
 import json
 from openpyxl import load_workbook
 from typing import List, Dict
+from functools import lru_cache
 from backend.Assembly.auto_match import (
     load_db_rows,
     match_one_best,
@@ -17,6 +18,11 @@ router = APIRouter(
 )
 
 DATA_DIR = Path("backend")
+
+
+@lru_cache(maxsize=4)
+def _get_cached_db_rows(excel_path_str: str, mtime: float):
+    return load_db_rows(Path(excel_path_str))
 
 
 @router.get("/inhouse-parts")
@@ -59,9 +65,13 @@ def get_inhouse_parts(bomId: str, spec: str):
     # =========================
     # 2. 작업시간 DB 로드 (1회)
     # =========================
-    db_rows, db_choices = load_db_rows(excel_path)
+    db_rows, db_choices = _get_cached_db_rows(
+        str(excel_path.resolve()),
+        excel_path.stat().st_mtime,
+    )
 
     parts = []
+    query_cache = {}
 
     # =========================
     # 3. inhouse PART + auto-match
@@ -74,25 +84,41 @@ def get_inhouse_parts(bomId: str, spec: str):
 
         part_id = n.get("id")
         part_name = n.get("name") or part_id
+        recommended_part_base = n.get("recommended_part_base")
+        recommended_source_sheet = n.get("recommended_source_sheet")
+        recommended_match_score = n.get("recommended_match_score")
 
         # Sequence에서는 사용자가 SUB에서 바꾼 이름을 우선 매칭 기준으로 사용한다.
         best = None
-        for query_raw in [part_name, part_id]:
-            if not query_raw:
-                continue
+        if recommended_part_base and recommended_source_sheet:
+            part_base = recommended_part_base
+            source_sheet = recommended_source_sheet
+            match_score = recommended_match_score or {
+                "source": "manual-recommendation",
+            }
+        else:
+            for query_raw in [part_name, part_id]:
+                if not query_raw:
+                    continue
 
-            candidate = match_one_best(
-                query_raw=query_raw,
-                db_rows=db_rows,
-                db_choices=db_choices,
-                topk=TOPK,
-            )
+                if query_raw in query_cache:
+                    candidate = query_cache[query_raw]
+                else:
+                    candidate = match_one_best(
+                        query_raw=query_raw,
+                        db_rows=db_rows,
+                        db_choices=db_choices,
+                        topk=TOPK,
+                    )
+                    query_cache[query_raw] = candidate
 
-            if candidate and candidate["score_jw"] >= JW_THRESHOLD:
-                best = candidate
-                break
+                if candidate and candidate["score_jw"] >= JW_THRESHOLD:
+                    best = candidate
+                    break
 
-        if best and best["score_jw"] >= JW_THRESHOLD:
+        if recommended_part_base and recommended_source_sheet:
+            pass
+        elif best and best["score_jw"] >= JW_THRESHOLD:
             part_base = best["db_part_raw"]
             source_sheet = best["sheet"]
             match_score = {

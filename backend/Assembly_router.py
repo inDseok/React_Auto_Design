@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 import json
 import threading
+from uuid import uuid4
 
 router = APIRouter(prefix="/assembly", tags=["assembly"])
 DATA_DIR = Path("backend/data")
@@ -58,7 +59,6 @@ def build_assembly_cache():
 
     for sheet in sheets:
         ws = wb[sheet]
-        print(sheet)
         headers = [cell.value for cell in ws[2]]
 
         col_idx = {}
@@ -156,6 +156,299 @@ def _to_float_or_none(value: Any) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _extract_node_id_from_instance_key(instance_key: str) -> Optional[str]:
+    key = _as_clean_str(instance_key)
+    if not key or "::" not in key:
+        return None
+    return key.split("::")[-1] or None
+
+
+def _infer_sequence_node_type(source_sheet: str) -> str:
+    normalized = _as_clean_str(source_sheet)
+    if normalized in {"공통 DB", "표준 동작", "부품 결합 DB"}:
+        return "PROCESS"
+    return "PART"
+
+
+def _build_effective_assembly_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    effective_rows = [dict(row) for row in rows if isinstance(row, dict)]
+    columns = ["부품 기준", "요소작업", "OPTION"]
+
+    for col in columns:
+        last_value = None
+        last_group_key = None
+
+        for row in effective_rows:
+            group_key = row.get("__groupKey")
+            if group_key != last_group_key:
+                last_group_key = group_key
+                last_value = None
+
+            current = row.get(col)
+            if (current is None or current == "") and last_value not in (None, ""):
+                row[col] = last_value
+            else:
+                last_value = current
+
+    return effective_rows
+
+
+def _build_sequence_groups_from_assembly_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    effective_rows = _build_effective_assembly_rows(rows)
+    groups: List[Dict[str, Any]] = []
+    current_group = None
+    current_block = None
+    group_part_counts: Dict[str, int] = {}
+
+    for row in effective_rows:
+        group_key = _as_clean_str(row.get("__groupKey")) or str(uuid4())
+        part_base = _as_clean_str(row.get("부품 기준"))
+        option = _as_clean_str(row.get("OPTION"))
+        group_label = _as_clean_str(
+            row.get("__groupLabel") or row.get("__sequenceGroupLabel")
+        )
+        instance_key = _as_clean_str(row.get("__partInstanceKey"))
+        source_sheet = _as_clean_str(row.get("__sourceSheet") or row.get("sourceSheet"))
+        repeat_weight = _to_float_or_none(row.get("반복횟수"))
+        worker = _as_clean_str(row.get("작업자"))
+
+        if current_group is None or current_group["groupKey"] != group_key:
+            current_group = {
+                "groupKey": group_key,
+                "groupLabel": group_label,
+                "blocks": [],
+            }
+            groups.append(current_group)
+            current_block = None
+            group_part_counts[group_key] = 0
+
+        if not group_label and not current_group["groupLabel"]:
+            current_group["groupLabel"] = ""
+
+        if instance_key:
+            block_key = instance_key
+        else:
+            if (
+                current_block
+                and current_block["groupKey"] == group_key
+                and current_block["partBase"] == part_base
+            ):
+                block_key = current_block["syncKey"]
+            else:
+                group_part_counts[group_key] += 1
+                block_key = f"{group_key}::{part_base}::{group_part_counts[group_key]}"
+
+        if not current_block or current_block["syncKey"] != block_key:
+            current_block = {
+                "groupKey": group_key,
+                "groupLabel": current_group["groupLabel"],
+                "syncKey": block_key,
+                "instanceKey": instance_key or "",
+                "partBase": part_base,
+                "option": option,
+                "repeatWeight": repeat_weight,
+                "sourceSheet": source_sheet,
+                "worker": worker,
+            }
+            current_group["blocks"].append(current_block)
+        else:
+            if current_block["repeatWeight"] is None and repeat_weight is not None:
+                current_block["repeatWeight"] = repeat_weight
+            if not current_block["option"] and option:
+                current_block["option"] = option
+            if not current_block["sourceSheet"] and source_sheet:
+                current_block["sourceSheet"] = source_sheet
+            if not current_block["worker"] and worker:
+                current_block["worker"] = worker
+
+    return groups
+
+
+def _sync_sequence_json_from_assembly_rows(bom_id: str, spec: str, rows: List[Dict[str, Any]]) -> None:
+    sequence_path = DATA_DIR / "bom_runs" / bom_id / f"{spec}_sequence.json"
+    if not sequence_path.exists():
+        return
+
+    try:
+        payload = json.loads(sequence_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to load sequence JSON for sync: {exc}")
+
+    existing_nodes = payload.get("nodes", [])
+    existing_groups = payload.get("groups", [])
+    if not isinstance(existing_nodes, list):
+        existing_nodes = []
+    if not isinstance(existing_groups, list):
+        existing_groups = []
+
+    node_by_id: Dict[str, Dict[str, Any]] = {}
+    node_by_sync_key: Dict[str, Dict[str, Any]] = {}
+    for node in existing_nodes:
+        if not isinstance(node, dict):
+            continue
+        node_id = _as_clean_str(node.get("id"))
+        if node_id:
+            node_by_id[node_id] = node
+
+        node_data = node.get("data")
+        if isinstance(node_data, dict):
+            sync_key = _as_clean_str(node_data.get("syncKey"))
+            if sync_key:
+                node_by_sync_key[sync_key] = node
+
+    group_meta_by_key: Dict[str, Dict[str, Any]] = {}
+    existing_group_nodes_by_key: Dict[str, List[Dict[str, Any]]] = {}
+    for group in existing_groups:
+        if not isinstance(group, dict):
+            continue
+        assembly_group_key = _as_clean_str(group.get("assemblyGroupKey"))
+        group_id = _as_clean_str(group.get("id"))
+        if assembly_group_key:
+            normalized_group_key = assembly_group_key
+        elif group_id:
+            normalized_group_key = f"SEQ-GRP::{group_id}"
+        else:
+            normalized_group_key = ""
+
+        if normalized_group_key:
+            group_meta_by_key[normalized_group_key] = group
+
+            raw_node_ids = group.get("nodeIds", [])
+            ordered_nodes = []
+            if isinstance(raw_node_ids, list):
+                for raw_node_id in raw_node_ids:
+                    node = node_by_id.get(_as_clean_str(raw_node_id))
+                    if node:
+                        ordered_nodes.append(node)
+            existing_group_nodes_by_key[normalized_group_key] = ordered_nodes
+
+    rebuilt_groups = _build_sequence_groups_from_assembly_rows(rows)
+    next_nodes: List[Dict[str, Any]] = []
+    next_groups: List[Dict[str, Any]] = []
+    next_edges: List[Dict[str, Any]] = []
+
+    for group_index, group in enumerate(rebuilt_groups):
+        group_key = group["groupKey"]
+        existing_group = group_meta_by_key.get(group_key, {})
+        existing_group_id = _as_clean_str(existing_group.get("id"))
+
+        if group_key.startswith("SEQ-GRP::"):
+            group_id = group_key.replace("SEQ-GRP::", "", 1)
+        else:
+            group_id = existing_group_id or f"grp-{uuid4()}"
+
+        node_ids: List[str] = []
+
+        for block_index, block in enumerate(group["blocks"]):
+            instance_key = _as_clean_str(block.get("instanceKey"))
+            sync_key = _as_clean_str(block.get("syncKey"))
+            existing_node = None
+
+            if instance_key:
+                node_id = _extract_node_id_from_instance_key(instance_key)
+                if node_id:
+                    existing_node = node_by_id.get(node_id)
+
+            if existing_node is None and sync_key:
+                existing_node = node_by_sync_key.get(sync_key)
+
+            if existing_node is None:
+                ordered_group_nodes = existing_group_nodes_by_key.get(group_key, [])
+                if block_index < len(ordered_group_nodes):
+                    existing_node = ordered_group_nodes[block_index]
+
+            part_base = _as_clean_str(block.get("partBase"))
+            option = _as_clean_str(block.get("option"))
+            source_sheet = _as_clean_str(block.get("sourceSheet"))
+            repeat_weight = block.get("repeatWeight")
+            worker = _as_clean_str(block.get("worker"))
+
+            node_type = _as_clean_str(existing_node.get("type")) if existing_node else ""
+            if not node_type:
+                node_type = _infer_sequence_node_type(source_sheet)
+
+            node_id = (
+                _as_clean_str(existing_node.get("id"))
+                if existing_node
+                else f"N-{uuid4().hex[:12]}"
+            )
+            is_assembly_imported = existing_node is None
+
+            if existing_node and isinstance(existing_node.get("position"), dict):
+                position = existing_node["position"]
+            else:
+                position = {
+                    "x": 80 + block_index * 240,
+                    "y": 120 + group_index * 180,
+                }
+
+            node_data = {}
+            if existing_node and isinstance(existing_node.get("data"), dict):
+                node_data.update(existing_node["data"])
+
+            node_data.update({
+                "label": part_base or node_data.get("label") or "노드",
+                "partBase": part_base,
+                "sourceSheet": source_sheet,
+                "option": option,
+                "syncKey": sync_key,
+                "instanceKey": instance_key,
+                "worker": worker,
+                "isAssemblyImported": is_assembly_imported,
+            })
+
+            if repeat_weight is not None:
+                node_data["repeatWeight"] = repeat_weight
+
+            if node_type == "PROCESS":
+                node_data["processKey"] = node_data.get("processKey") or f"{source_sheet or 'ASSEMBLY'}:{part_base}"
+                node_data["processType"] = node_data.get("processType") or "STANDARD"
+            else:
+                node_data["partId"] = node_data.get("partId") or part_base
+                node_data["partName"] = node_data.get("partName") or part_base
+                node_data["inhouse"] = node_data.get("inhouse", True)
+                node_data["statusLabel"] = node_data.get("statusLabel", "")
+
+            next_node = {
+                "id": node_id,
+                "type": node_type,
+                "position": position,
+                "data": node_data,
+            }
+
+            for field in ("measured", "selected", "dragging"):
+                if existing_node and field in existing_node:
+                    next_node[field] = existing_node[field]
+
+            next_nodes.append(next_node)
+            node_ids.append(node_id)
+
+        next_groups.append({
+            "id": group_id,
+            "nodeIds": node_ids,
+            "label": group.get("groupLabel", ""),
+            "assemblyGroupKey": group_key,
+        })
+
+        for index in range(len(node_ids) - 1):
+            source_id = node_ids[index]
+            target_id = node_ids[index + 1]
+            next_edges.append({
+                "source": source_id,
+                "target": target_id,
+                "type": "smoothstep",
+                "id": f"xy-edge__{source_id}-{target_id}",
+            })
+
+    payload["nodes"] = next_nodes
+    payload["groups"] = next_groups
+    payload["edges"] = next_edges
+    sequence_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def _load_sequence_entries(root_dir: Path, spec: str) -> List[Dict[str, Any]]:
@@ -257,12 +550,15 @@ def _load_sequence_entries(root_dir: Path, spec: str) -> List[Dict[str, Any]]:
         option: str,
         source_sheet: str,
         repeat_weight: Optional[float],
+        worker: str,
     ) -> None:
         key = (group_key, instance_key, part_base, option)
         if key in index_by_key:
             idx = index_by_key[key]
             if entries[idx].get("repeatWeight") is None and repeat_weight is not None:
                 entries[idx]["repeatWeight"] = repeat_weight
+            if not entries[idx].get("worker") and worker:
+                entries[idx]["worker"] = worker
             return
 
         index_by_key[key] = len(entries)
@@ -274,6 +570,7 @@ def _load_sequence_entries(root_dir: Path, spec: str) -> List[Dict[str, Any]]:
             "option": option,
             "sourceSheet": source_sheet,
             "repeatWeight": repeat_weight,
+            "worker": worker,
         })
 
     for i, group in enumerate(groups):
@@ -282,7 +579,7 @@ def _load_sequence_entries(root_dir: Path, spec: str) -> List[Dict[str, Any]]:
 
         group_id = _as_clean_str(group.get("id")) or f"group-{i + 1}"
         group_label = _as_clean_str(group.get("label"))
-        group_key = f"SEQ-GRP::{group_id}"
+        group_key = _as_clean_str(group.get("assemblyGroupKey")) or f"SEQ-GRP::{group_id}"
 
         raw_node_ids = group.get("nodeIds", [])
         if not isinstance(raw_node_ids, list):
@@ -309,6 +606,7 @@ def _load_sequence_entries(root_dir: Path, spec: str) -> List[Dict[str, Any]]:
                 continue
 
             rw = _to_positive_number(payload.get("repeatWeight"))
+            worker = _as_clean_str(payload.get("worker"))
 
             add_entry(
                 group_key=group_key,
@@ -318,6 +616,7 @@ def _load_sequence_entries(root_dir: Path, spec: str) -> List[Dict[str, Any]]:
                 option=option,
                 source_sheet=source_sheet,
                 repeat_weight=rw,
+                worker=worker,
             )
 
     for node_id in node_order:
@@ -335,6 +634,7 @@ def _load_sequence_entries(root_dir: Path, spec: str) -> List[Dict[str, Any]]:
             continue
 
         rw = _to_positive_number(payload.get("repeatWeight"))
+        worker = _as_clean_str(payload.get("worker"))
         add_entry(
             group_key=f"SEQ-NODE::{node_id}",
             group_label="",
@@ -343,6 +643,7 @@ def _load_sequence_entries(root_dir: Path, spec: str) -> List[Dict[str, Any]]:
             option=option,
             source_sheet=source_sheet,
             repeat_weight=rw,
+            worker=worker,
         )
 
     return entries
@@ -406,6 +707,18 @@ def save_assembly(
     dir_path.mkdir(parents=True, exist_ok=True)
 
     path = dir_path / f"{spec}_assembly.json"
+    sequence_path = dir_path / f"{spec}_sequence.json"
+
+    if not rows:
+        if path.exists() or sequence_path.exists():
+            raise HTTPException(
+                status_code=400,
+                detail="빈 조립 총공수 데이터는 기존 파일을 덮어쓸 수 없습니다."
+            )
+        raise HTTPException(
+            status_code=400,
+            detail="저장할 조립 총공수 데이터가 없습니다."
+        )
 
     payload = {
         "rows": rows
@@ -415,6 +728,8 @@ def save_assembly(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
+
+    _sync_sequence_json_from_assembly_rows(bom_id, spec, rows)
 
     return {"status": "ok"}
 
@@ -436,9 +751,6 @@ def get_session_info(request: Request, response: Response):
     sid = get_or_create_sid(request, response)
     refresh_session_state()
     state = SESSION_STATE.get(sid)
-
-    print("COOKIE SID:", sid)
-    print("SESSION_STATE keys:", list(SESSION_STATE.keys())[:5])
 
     if not state:
         return {"ok": False}
@@ -490,6 +802,7 @@ def auto_match_assembly(bom_id: str, spec: str):
         sequence_group_label = entry["groupLabel"]
         sequence_instance_key = entry["instanceKey"]
         repeat_weight = entry.get("repeatWeight")
+        worker = _as_clean_str(entry.get("worker"))
 
         matched_rows = []
         candidate_sheets = (
@@ -518,6 +831,8 @@ def auto_match_assembly(bom_id: str, spec: str):
             out_row["__groupKey"] = sequence_group_key
             out_row["__sequenceGroupLabel"] = sequence_group_label
             out_row["__partInstanceKey"] = sequence_instance_key
+            if worker:
+                out_row["작업자"] = worker
 
             if repeat_weight is not None:
                 out_row[repeat_key] = repeat_weight

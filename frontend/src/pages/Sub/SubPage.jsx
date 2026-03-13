@@ -53,6 +53,11 @@ function buildTree(nodes) {
   return roots;
 }
 
+function makeTreeCacheKey(bomId, spec) {
+  if (!bomId || !spec) return "";
+  return `${bomId}::${spec}`;
+}
+
 
 
 /* =========================
@@ -104,12 +109,31 @@ export default function SubPage() {
 
   const reqIdRef = useRef(0);
 
+  function updateNodesAndCache(nextNodes) {
+    setNodes(nextNodes);
+    if (state.bomId && state.selectedSpec) {
+      actions.setTreeCacheEntry?.(
+        makeTreeCacheKey(state.bomId, state.selectedSpec),
+        { nodes: nextNodes }
+      );
+    }
+  }
+
   useEffect(() => {
     if (!state.bomId || !state.selectedSpec) {
       setNodes(null);
       return;
     }
-  
+
+    const cacheKey = makeTreeCacheKey(state.bomId, state.selectedSpec);
+    const cachedNodes = state.treeCache?.[cacheKey]?.nodes;
+    if (Array.isArray(cachedNodes)) {
+      setNodes(cachedNodes);
+      setLoading(false);
+      setErr("");
+      return;
+    }
+
     const myReqId = ++reqIdRef.current;
   
     async function loadTree() {
@@ -133,7 +157,9 @@ export default function SubPage() {
         // 🔥 요청 ID가 최신 요청이 아닐 경우 — 응답 버리기
         if (myReqId !== reqIdRef.current) return;
   
-        setNodes(data.nodes ?? []);
+        const nextNodes = data.nodes ?? [];
+        setNodes(nextNodes);
+        actions.setTreeCacheEntry?.(cacheKey, { nodes: nextNodes });
       } catch (e) {
         if (myReqId !== reqIdRef.current) return;
         setErr(String(e?.message ?? e));
@@ -145,7 +171,7 @@ export default function SubPage() {
     }
   
     loadTree();
-  }, [state.bomId, state.selectedSpec]);
+  }, [state.bomId, state.selectedSpec, state.treeCache]);
   
 
   /* ---------------------------------
@@ -184,7 +210,7 @@ export default function SubPage() {
 
       // 서버에서 nodes 내려준다고 가정
       if (updatedTree?.nodes) {
-        setNodes(updatedTree.nodes);
+        updateNodesAndCache(updatedTree.nodes);
       }
     } catch (e) {
       console.error("노드 이동 실패:", e);
@@ -226,7 +252,14 @@ export default function SubPage() {
       );
   
       // UI에 반영
-      setNodes(prev => [...prev, created]);
+      setNodes(prev => {
+        const next = [...prev, created];
+        actions.setTreeCacheEntry?.(
+          makeTreeCacheKey(state.bomId, state.selectedSpec),
+          { nodes: next }
+        );
+        return next;
+      });
   
     } catch (e) {
       alert("노드 추가 실패: " + String(e?.message ?? e));
@@ -276,18 +309,27 @@ export default function SubPage() {
      render
   ========================= */
   return (
-    <div style={{ padding: 16, height: "100vh", boxSizing: "border-box" }}>
-      
-      <div className="top-left">
-        <UploadBom />
+    <div style={{ padding: 16, height: "100vh", boxSizing: "border-box", display: "flex", flexDirection: "column" }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "minmax(320px, 1.1fr) minmax(320px, 0.9fr)",
+          gap: 16,
+          alignItems: "start",
+          marginBottom: 12,
+        }}
+      >
+        <div style={{ minWidth: 0 }}>
+          <UploadBom />
+        </div>
+
+        <div style={{ minWidth: 0 }}>
+          <SpecSelector />
+        </div>
       </div>
 
-      <div className="spec-panel">
-        <SpecSelector />
-      </div>
-
-      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-      <Space style={{ marginBottom: 8 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+      <Space style={{ marginBottom: 8, flexWrap: "wrap" }}>
           <button
             onClick={() => {
               fixedBomIdRef.current = null;
@@ -382,10 +424,10 @@ export default function SubPage() {
           </div>
 
           {/* 오른쪽 패널 */}
-          <div style={{ width: 480}}>
+          <div style={{ width: 480, minHeight: 0 }}>
             <SelectedPartPanel
               node={selectedNode}
-              onUpdateNodes={(newNodes) => setNodes(newNodes)}
+              onUpdateNodes={updateNodesAndCache}
             />
           </div>
         </div>

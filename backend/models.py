@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 from typing import List, Optional, Literal
 from enum import Enum
+from typing import Dict, Any
 
 
 class NodeType(str, Enum):
@@ -18,6 +19,9 @@ class SubNode(BaseModel):
     material: Optional[str] = None
     qty: Optional[float] = None
     inhouse: Optional[bool] = False
+    recommended_part_base: Optional[str] = None
+    recommended_source_sheet: Optional[str] = None
+    recommended_match_score: Optional[Dict[str, Any]] = None
 
 
 class TreeMeta(BaseModel):
@@ -40,6 +44,9 @@ class SubNodePatch(BaseModel):
     qty: Optional[float] = None
     type: Optional[NodeType] = None   # ← 추가
     inhouse: Optional[bool] = None
+    recommended_part_base: Optional[str] = None
+    recommended_source_sheet: Optional[str] = None
+    recommended_match_score: Optional[Dict[str, Any]] = None
 
 class MoveNodeRequest(BaseModel):
     node_id: str

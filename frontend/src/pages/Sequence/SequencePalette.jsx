@@ -1,7 +1,12 @@
 import React from "react";
 import { useSequenceDnD } from "./SequenceDnDContext";
 
-export default function SequencePalette({ parts = [], processes = [] }) {
+export default function SequencePalette({
+  parts = [],
+  processes = [],
+  loading = false,
+  error = null,
+}) {
   const [, setDragItem] = useSequenceDnD();
 
   const onDragStart = (e, payload) => {
@@ -19,6 +24,14 @@ export default function SequencePalette({ parts = [], processes = [] }) {
         background: "#ffffff",
       }}
     >
+      <style>
+        {`
+          @keyframes sequence-spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+          }
+        `}
+      </style>
       {/* ===============================
           PART 섹션
          =============================== */}
@@ -33,7 +46,47 @@ export default function SequencePalette({ parts = [], processes = [] }) {
           PART
         </div>
 
-        {parts.length === 0 && (
+        {loading && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              marginBottom: 10,
+              fontSize: 12,
+              color: "#475569",
+            }}
+          >
+            <div
+              style={{
+                width: 14,
+                height: 14,
+                borderRadius: "50%",
+                border: "2px solid #cbd5e1",
+                borderTopColor: "#2563eb",
+                animation: "sequence-spin 0.8s linear infinite",
+              }}
+            />
+            PART 조회 중...
+          </div>
+        )}
+
+        {error && (
+          <div
+            style={{
+              marginBottom: 10,
+              padding: "8px 10px",
+              borderRadius: 8,
+              background: "#fef2f2",
+              color: "#991b1b",
+              fontSize: 12,
+            }}
+          >
+            {error}
+          </div>
+        )}
+
+        {!loading && parts.length === 0 && (
           <div style={{ fontSize: 12, color: "#64748b" }}>
             사용 가능한 부품 없음
           </div>

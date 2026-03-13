@@ -4,11 +4,33 @@ import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors, useDragg
 import RowContextMenu from "./RowContextMenu";
 import { computeRowspanInfo } from "./groupUtils";
 
-import { v4 as uuidv4 } from "uuid";
-
 /* =========================
    utils
 ========================= */
+
+const TABLE_COLUMNS = [
+  { key: "부품 기준", label: "부품 기준", width: "14%" },
+  { key: "요소작업", label: "요소작업", width: "13.5%" },
+  { key: "OPTION", label: "OPTION", width: "12%" },
+  { key: "작업자", label: "작업자", width: "5%" },
+  { key: "no", label: "no", width: "6%" },
+  { key: "동작요소", label: "동작요소", width: "31%" },
+  { key: "반복횟수", label: "반복횟수", width: "5%" },
+  { key: "SEC", label: "SEC", width: "5%" },
+  { key: "TOTAL", label: "TOTAL", width: "5%" },
+];
+
+const TABLE_MIN_WIDTH = 1280;
+const MIN_COLUMN_WIDTH = 72;
+
+function getInitialColumnWidths() {
+  return TABLE_COLUMNS.map((column) => {
+    if (typeof column.width === "string" && column.width.endsWith("%")) {
+      return (parseFloat(column.width) / 100) * TABLE_MIN_WIDTH;
+    }
+    return Number(column.width) || MIN_COLUMN_WIDTH;
+  });
+}
 
 // rows 등장 순서대로 groupKey 리스트 생성
 function buildGroupOrder(rows) {
@@ -35,13 +57,6 @@ function buildGroupRowsMap(rows) {
   return map;
 }
 
-function arrayMoveImmutable(array, fromIndex, toIndex) {
-  const copy = [...array];
-  const [moved] = copy.splice(fromIndex, 1);
-  copy.splice(toIndex, 0, moved);
-  return copy;
-}
-
 function toNumber(value) {
   if (typeof value === "number") {
     return Number.isFinite(value) ? value : 0;
@@ -63,31 +78,52 @@ function formatNumber(value) {
     : "0.00";
 }
 
-function computeDropIndexFromPointer(groupOrder, groupRects, activeId, overId, pointerY) {
-  // overId 기준으로 위/아래 절반 판단해서 drop index 계산
-  const overIndex = groupOrder.indexOf(overId);
-  if (overIndex === -1) return -1;
+function getNoCellHighlight(value) {
+  const normalized = String(value ?? "").trim();
 
-  const rect = groupRects.get(overId);
-  if (!rect) return overIndex;
+  if (normalized === "필비") {
+    return { background: "#fef3c7", color: "#92400e" };
+  }
+  if (normalized === "낭비") {
+    return { background: "#fee2e2", color: "#991b1b" };
+  }
+  if (normalized === "가치") {
+    return { background: "#dcfce7", color: "#166534" };
+  }
 
-  const midY = rect.top + rect.height / 2;
-  const insertAfter = pointerY > midY;
-
-  // active가 위에서 아래로 내려올 때, 제거 후 삽입 인덱스 보정
-  const activeIndex = groupOrder.indexOf(activeId);
-  let target = overIndex + (insertAfter ? 1 : 0);
-
-  if (activeIndex !== -1 && activeIndex < target) target -= 1;
-  return target;
+  return null;
 }
 
-// movedGroupKey를 새 key로 재발급(질문2: B)
-function rekeyGroup(rows, oldKey, newKey) {
-  return rows.map((r) => {
-    if (r.__groupKey !== oldKey) return r;
-    return { ...r, __groupKey: newKey };
-  });
+function buildPartBlocks(rows) {
+  const blocks = [];
+  let i = 0;
+
+  while (i < rows.length) {
+    const row = rows[i];
+    const span = Math.max(1, Number(row.__partRowspan) || 1);
+
+    blocks.push({
+      id: row.id,
+      groupKey: row.__groupKey,
+      label: row["부품 기준"] || "",
+      rows: rows.slice(i, i + span),
+    });
+
+    i += span;
+  }
+
+  return blocks;
+}
+
+function buildGlobalPartBlocks(groupOrder, groupPartBlocksMap) {
+  const blocks = [];
+  for (const groupKey of groupOrder) {
+    const groupBlocks = groupPartBlocksMap.get(groupKey) || [];
+    for (const block of groupBlocks) {
+      blocks.push(block);
+    }
+  }
+  return blocks;
 }
 
 // rows에서 UI 메타 제거(선택)
@@ -121,24 +157,14 @@ export default function AssemblyTable({
   onGroupLabelChange,
 }) {
 
-  const columns = [
-    "부품 기준",
-    "요소작업",
-    "OPTION",
-    "작업자",
-    "no",
-    "동작요소",
-    "반복횟수",
-    "SEC",
-    "TOTAL",
-  ];
-
   const [contextMenu, setContextMenu] = useState({
     visible: false,
     x: 0,
     y: 0,
     row: null,
   });
+  const [columnWidths, setColumnWidths] = useState(getInitialColumnWidths);
+  const resizingRef = useRef(null);
 
   const openMenu = (e, row) => {
     e.preventDefault();
@@ -157,8 +183,42 @@ export default function AssemblyTable({
       row: null,
     }));
 
+  const stopResize = () => {
+    resizingRef.current = null;
+    document.removeEventListener("mousemove", handleResizeMove);
+    document.removeEventListener("mouseup", stopResize);
+  };
+
+  const handleResizeMove = (e) => {
+    const resizeState = resizingRef.current;
+    if (!resizeState) return;
+
+    const deltaX = e.clientX - resizeState.startX;
+    const nextWidth = Math.max(MIN_COLUMN_WIDTH, resizeState.startWidth + deltaX);
+
+    setColumnWidths((prev) =>
+      prev.map((width, index) =>
+        index === resizeState.index ? nextWidth : width
+      )
+    );
+  };
+
+  const startResize = (index, e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    resizingRef.current = {
+      index,
+      startX: e.clientX,
+      startWidth: columnWidths[index],
+    };
+
+    document.addEventListener("mousemove", handleResizeMove);
+    document.addEventListener("mouseup", stopResize);
+  };
+
   // DnD 상태
-  const [activeGroupKey, setActiveGroupKey] = useState(null);
+  const [activePartId, setActivePartId] = useState(null);
   const [activeLabel, setActiveLabel] = useState("");
   
   const groupRectsRef = useRef(new Map());
@@ -174,6 +234,17 @@ export default function AssemblyTable({
   // 그룹 순서 / 그룹별 row 매핑
   const groupOrder = useMemo(() => buildGroupOrder(processedRows), [processedRows]);
   const groupRowsMap = useMemo(() => buildGroupRowsMap(processedRows), [processedRows]);
+  const groupPartBlocksMap = useMemo(() => {
+    const map = new Map();
+    for (const gk of groupOrder) {
+      map.set(gk, buildPartBlocks(groupRowsMap.get(gk) || []));
+    }
+    return map;
+  }, [groupOrder, groupRowsMap]);
+  const globalPartBlocks = useMemo(
+    () => buildGlobalPartBlocks(groupOrder, groupPartBlocksMap),
+    [groupOrder, groupPartBlocksMap]
+  );
 
   const groupSums = useMemo(() => {
     const sums = new Map();
@@ -201,10 +272,10 @@ export default function AssemblyTable({
   }, [processedRows]);
 
   // 그룹 rect 등록용 ref 콜백 생성
-  const registerGroupRect = (groupKey) => (el) => {
+  const registerPartRect = (partId) => (el) => {
     if (!el) return;
     const rect = el.getBoundingClientRect();
-    groupRectsRef.current.set(groupKey, rect);
+    groupRectsRef.current.set(partId, rect);
   };
   
 
@@ -319,14 +390,19 @@ export default function AssemblyTable({
 
   function onDragStart(event) {
     const { active } = event;
-    const gk = active?.id;
-    if (!gk) return;
+    const partId = active?.id;
+    if (!partId) return;
 
-    setActiveGroupKey(gk);
+    setActivePartId(partId);
 
-    // 라벨(부품기준 텍스트) 추출: 해당 그룹 첫 row의 "부품 기준"
-    const firstRow = (groupRowsMap.get(gk) || [])[0];
-    setActiveLabel(firstRow?.["부품 기준"] || "");
+    for (const blocks of groupPartBlocksMap.values()) {
+      const block = blocks.find((item) => item.id === partId);
+      if (block) {
+        setActiveLabel(block.label);
+        return;
+      }
+    }
+    setActiveLabel("");
   }
 
   function onDragOver(event) {
@@ -340,35 +416,79 @@ export default function AssemblyTable({
     const activeId = active?.id;
     const overId = over?.id;
   
-    setActiveGroupKey(null);
+    setActivePartId(null);
   
     if (!activeId || !overId) return;
     if (activeId === overId) return;
     if (typeof onRowsChange !== "function") return;
-  
-    const oldIndex = groupOrder.indexOf(activeId);
-    const newIndex = groupOrder.indexOf(overId);
-    if (oldIndex === -1 || newIndex === -1) return;
-  
-    // 1) 그룹 순서 재정렬(일단 over 위치로 이동)
-    const nextGroupOrder = arrayMoveImmutable(groupOrder, oldIndex, newIndex);
-  
-    // 2) 이동된 그룹 __groupKey 재발급(B)
-    const newKey = uuidv4();
-    const rekeyed = rekeyGroup(processedRows, activeId, newKey);
-  
-    // 3) 새 groupOrder에서도 activeId를 newKey로 치환
-    const normalizedOrder = nextGroupOrder.map((k) => (k === activeId ? newKey : k));
-  
-    // 4) flatten
-    const nextMap = buildGroupRowsMap(rekeyed);
-    const flattened = [];
-    for (const gk of normalizedOrder) {
-      const list = nextMap.get(gk) || [];
-      for (const r of list) flattened.push(stripRowspanMeta(r));
+
+    const activeIndex = globalPartBlocks.findIndex((block) => block.id === activeId);
+    const overIndex = globalPartBlocks.findIndex((block) => block.id === overId);
+    if (activeIndex === -1 || overIndex === -1) return;
+
+    const overBlock = globalPartBlocks[overIndex];
+    if (!overBlock) return;
+
+    const reorderedBlocks = [...globalPartBlocks];
+    const [moved] = reorderedBlocks.splice(activeIndex, 1);
+    reorderedBlocks.splice(overIndex, 0, moved);
+
+    const sourceGroupKey = moved.groupKey;
+    const targetGroupKey = overBlock.groupKey;
+    const targetGroupRows = groupRowsMap.get(targetGroupKey) || [];
+    const targetGroupLabel =
+      targetGroupRows[0]?.__groupLabel ||
+      targetGroupRows[0]?.__sequenceGroupLabel ||
+      "";
+
+    const normalizedBlocks = reorderedBlocks.map((block) => {
+      if (block.id !== moved.id) return block;
+
+      const movedRows = block.rows.map((row) => {
+        const nextRow = {
+          ...row,
+          __groupKey: targetGroupKey,
+        };
+
+        if (sourceGroupKey !== targetGroupKey) {
+          nextRow.__groupLabel = targetGroupLabel;
+        }
+
+        return nextRow;
+      });
+
+      return {
+        ...block,
+        groupKey: targetGroupKey,
+        rows: movedRows,
+      };
+    });
+
+    const regroupedRowsMap = new Map();
+    for (const block of normalizedBlocks) {
+      if (!regroupedRowsMap.has(block.groupKey)) {
+        regroupedRowsMap.set(block.groupKey, []);
+      }
+      regroupedRowsMap.get(block.groupKey).push(...block.rows);
     }
-  
-    onRowsChange(flattened);
+
+    const orderedGroupKeys = [];
+    const seenGroupKeys = new Set();
+    for (const block of normalizedBlocks) {
+      if (seenGroupKeys.has(block.groupKey)) continue;
+      seenGroupKeys.add(block.groupKey);
+      orderedGroupKeys.push(block.groupKey);
+    }
+
+    const nextRows = [];
+    for (const groupKey of orderedGroupKeys) {
+      const rowsInGroup = regroupedRowsMap.get(groupKey) || [];
+      for (const row of rowsInGroup) {
+        nextRows.push(stripRowspanMeta(row));
+      }
+    }
+
+    onRowsChange(nextRows);
   }
   
 
@@ -430,15 +550,25 @@ export default function AssemblyTable({
               borderCollapse: "collapse",
               fontSize: 13.5,
               width: "100%",
-              minWidth: 1200,
+              minWidth: Math.max(
+                TABLE_MIN_WIDTH,
+                columnWidths.reduce((sum, width) => sum + width, 0)
+              ),
+              tableLayout: "fixed",
             }}
           >
+            <colgroup>
+              {TABLE_COLUMNS.map((column, index) => (
+                <col key={column.key} style={{ width: columnWidths[index] }} />
+              ))}
+            </colgroup>
             <thead>
               <tr>
-                {columns.map((col) => (
+                {TABLE_COLUMNS.map((column, index) => (
                   <th
-                    key={col}
+                    key={column.key}
                     style={{
+                      position: "relative",
                       padding: "10px 12px",
                       borderBottom: "1px solid #d9d9d9",
                       borderRight: "1px solid #d9d9d9",
@@ -448,107 +578,135 @@ export default function AssemblyTable({
                       whiteSpace: "nowrap",
                     }}
                   >
-                    {col}
+                    {column.label}
+                    <div
+                      onMouseDown={(e) => startResize(index, e)}
+                      style={{
+                        position: "absolute",
+                        top: 0,
+                        right: -3,
+                        width: 6,
+                        height: "100%",
+                        cursor: "col-resize",
+                        userSelect: "none",
+                        zIndex: 2,
+                      }}
+                      title="열 너비 조절"
+                    />
                   </th>
                 ))}
               </tr>
             </thead>
 
             {groupOrder.map((gk) => {
-              const rowsInGroup = groupRowsMap.get(gk) || [];
-              if (rowsInGroup.length === 0) return null;
+              const partBlocks = groupPartBlocksMap.get(gk) || [];
+              if (partBlocks.length === 0) return null;
               const sum = groupSums.get(gk) || { secSum: 0, totalSum: 0 };
-              const groupLabel = rowsInGroup[0]?.__groupLabel || rowsInGroup[0]?.__sequenceGroupLabel || "";
+              const groupLabel = partBlocks[0]?.rows[0]?.__groupLabel || partBlocks[0]?.rows[0]?.__sequenceGroupLabel || "";
               return (
-                <DroppableGroupTbody
-                  key={gk}
-                  id={gk}
-                  registerRect={registerGroupRect(gk)}
-                >
-                  {rowsInGroup.map((row) => (
-                    <tr key={row.id} onContextMenu={(e) => openMenu(e, row)}>
-                      {row.__showPart && (
-                        <td rowSpan={row.__partRowspan} style={cellStyle(true)}>
-                          <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
-                            {/* ⠿ 핸들만 드래그 */}
-                            <DraggableHandle id={gk} />
+                <React.Fragment key={gk}>
+                  {partBlocks.map((block) => (
+                    <DroppablePartTbody
+                      key={block.id}
+                      id={block.id}
+                      registerRect={registerPartRect(block.id)}
+                    >
+                      {block.rows.map((row) => (
+                        <tr key={row.id} onContextMenu={(e) => openMenu(e, row)}>
+                          {row.__showPart && (
+                            <td rowSpan={row.__partRowspan} style={cellStyle(true)}>
+                              <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                                <DraggableHandle id={block.id} />
 
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              {renderTextarea(row, "부품 기준")}
-                            </div>
-                          </div>
-                        </td>
-                      )}
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  {renderTextarea(row, "부품 기준")}
+                                </div>
+                              </div>
+                            </td>
+                          )}
 
-                      {row.__showTask && (
-                        <td rowSpan={row.__taskRowspan} style={cellStyle()}>
-                          {renderTextarea(row, "요소작업")}
-                        </td>
-                      )}
+                          {row.__showTask && (
+                            <td rowSpan={row.__taskRowspan} style={cellStyle()}>
+                              {renderTextarea(row, "요소작업")}
+                            </td>
+                          )}
 
-                      {row.__showOption && (
-                        <td rowSpan={row.__optionRowspan} style={cellStyle()}>
-                          {renderTextarea(row, "OPTION")}
-                        </td>
-                      )}
+                          {row.__showOption && (
+                            <td rowSpan={row.__optionRowspan} style={cellStyle()}>
+                              {renderTextarea(row, "OPTION")}
+                            </td>
+                          )}
 
-                      {["작업자", "no", "동작요소"].map((col) => (
-                        <td key={col} style={cellStyle()}>
-                          {renderTextarea(row, col)}
-                        </td>
+                          <td style={cellStyle()}>
+                            {renderTextarea(row, "작업자")}
+                          </td>
+                          <td
+                            style={{
+                              ...cellStyle(),
+                              ...(getNoCellHighlight(row["no"]) || {}),
+                            }}
+                          >
+                            {renderTextarea(row, "no")}
+                          </td>
+                          <td style={cellStyle()}>
+                            {renderTextarea(row, "동작요소")}
+                          </td>
+                          <td style={cellStyle()}>
+                            {renderNumberInput(row, "반복횟수")}
+                          </td>
+                          <td style={cellStyle()}>
+                            {renderDecimalInput(row, "SEC")}
+                          </td>
+                          <td style={cellStyle()}>
+                            {renderDecimalInput(row, "TOTAL")}
+                          </td>
+                        </tr>
                       ))}
-                      <td style={cellStyle()}>
-                        {renderNumberInput(row, "반복횟수")}
+                    </DroppablePartTbody>
+                  ))}
+                  <tbody>
+                    <tr>
+                      <td
+                        colSpan={4}
+                        style={{
+                          ...cellStyle(true),
+                          background: "#f8fafc",
+                          minWidth: 180,
+                          textAlign: "center",
+                          verticalAlign: "middle",
+                        }}
+                      >
+                        {renderGroupLabelInput(gk, groupLabel)}
                       </td>
-                      <td style={cellStyle()}>
-                        {renderDecimalInput(row, "SEC")}
+                      <td
+                        colSpan={3}
+                        style={{
+                          ...cellStyle(true),
+                          textAlign: "right",
+                          background: "#f8fafc",
+                        }}
+                      >
+                        합계
                       </td>
-                      <td style={cellStyle()}>
-                        {renderDecimalInput(row, "TOTAL")}
+                      <td
+                        style={{
+                          ...cellStyle(true),
+                          background: "#f8fafc",
+                        }}
+                      >
+                        {formatNumber(sum.secSum)}
+                      </td>
+                      <td
+                        style={{
+                          ...cellStyle(true),
+                          background: "#f8fafc",
+                        }}
+                      >
+                        {formatNumber(sum.totalSum)}
                       </td>
                     </tr>
-                  ))}
-                  <tr>
-                    <td
-                      colSpan={4}
-                      style={{
-                        ...cellStyle(true),
-                        background: "#f8fafc",
-                        minWidth: 180,
-                        textAlign: "center",
-                        verticalAlign: "middle",
-                      }}
-                    >
-                      {renderGroupLabelInput(gk, groupLabel)}
-                    </td>
-                    <td
-                      colSpan={3}
-                      style={{
-                        ...cellStyle(true),
-                        textAlign: "right",
-                        background: "#f8fafc",
-                      }}
-                    >
-                      합계
-                    </td>
-                    <td
-                      style={{
-                        ...cellStyle(true),
-                        background: "#f8fafc",
-                      }}
-                    >
-                      {formatNumber(sum.secSum)}
-                    </td>
-                    <td
-                      style={{
-                        ...cellStyle(true),
-                        background: "#f8fafc",
-                      }}
-                    >
-                      {formatNumber(sum.totalSum)}
-                    </td>
-                  </tr>
-                </DroppableGroupTbody>
+                  </tbody>
+                </React.Fragment>
               );
             })}
             <tfoot>
@@ -584,7 +742,7 @@ export default function AssemblyTable({
           </table>
 
           <DragOverlay>
-            {activeGroupKey ? <HandleGhost /> : null}
+            {activePartId ? <HandleGhost /> : null}
           </DragOverlay>
         </DndContext>
       </div>
@@ -628,7 +786,7 @@ export default function AssemblyTable({
 /* =========================
    Draggable Handle
    - ⠿만 draggable 느낌
-   - 실제 이동은 groupKey(id)로 수행
+   - 실제 이동은 부품 기준 블록(id)로 수행
 ========================= */
 
 
@@ -651,14 +809,14 @@ function DraggableHandle({ id }) {
         lineHeight: "20px",
         marginTop: 6,
       }}
-      title="그룹 이동"
+      title="부품 기준 이동"
     >
       ⠿
     </span>
   );
 }
 
-function DroppableGroupTbody({ id, children, registerRect }) {
+function DroppablePartTbody({ id, children, registerRect }) {
   const { setNodeRef, isOver } = useDroppable({ id });
 
   // droppable ref + rect 측정 ref를 합쳐서 연결

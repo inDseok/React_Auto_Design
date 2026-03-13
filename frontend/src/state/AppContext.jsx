@@ -10,7 +10,7 @@ const initialState = {
 
   // 큰 트리는 여기에 넣지 않는 것을 권장합니다.
   // 필요한 경우에만 최소한으로 캐시하세요(예: 노드 수가 적을 때).
-  treeCache: null,
+  treeCache: {},
 
   lastLoadedAt: null,
 };
@@ -36,7 +36,7 @@ function loadFromStorage() {
     selectedSpec: parsed.selectedSpec ?? null,
     sourceSheet: parsed.sourceSheet ?? null,
     selectedNodeId: parsed.selectedNodeId ?? null,
-    treeCache: parsed.treeCache ?? null,
+    treeCache: parsed.treeCache ?? {},
     lastLoadedAt: parsed.lastLoadedAt ?? null,
   };
 }
@@ -69,7 +69,7 @@ function reducer(state, action) {
         selectedSpec: null,
         sourceSheet: null,
         selectedNodeId: null,
-        treeCache: null,
+        treeCache: {},
         lastLoadedAt: null,
       };
 
@@ -79,7 +79,6 @@ function reducer(state, action) {
         selectedSpec: action.payload?.selectedSpec ?? null,
         sourceSheet: action.payload?.sourceSheet ?? null,
         selectedNodeId: null,
-        treeCache: null,
         lastLoadedAt: null,
       };
 
@@ -89,12 +88,25 @@ function reducer(state, action) {
     case "SET_TREE_CACHE":
       return {
         ...state,
-        treeCache: action.payload?.treeCache ?? null,
+        treeCache: action.payload?.treeCache ?? {},
         lastLoadedAt: action.payload?.lastLoadedAt ?? Date.now(),
       };
 
+    case "SET_TREE_CACHE_ENTRY": {
+      const cacheKey = action.payload?.cacheKey;
+      if (!cacheKey) return state;
+      return {
+        ...state,
+        treeCache: {
+          ...(state.treeCache ?? {}),
+          [cacheKey]: action.payload?.entry ?? null,
+        },
+        lastLoadedAt: action.payload?.lastLoadedAt ?? Date.now(),
+      };
+    }
+
     case "CLEAR_TREE_CACHE":
-      return { ...state, treeCache: null, lastLoadedAt: null };
+      return { ...state, treeCache: {}, lastLoadedAt: null };
 
     default:
       return state;
@@ -130,6 +142,12 @@ export function AppProvider({ children }) {
           dispatch({
             type: "SET_TREE_CACHE",
             payload: { treeCache, lastLoadedAt: Date.now() },
+          }),
+
+        setTreeCacheEntry: (cacheKey, entry) =>
+          dispatch({
+            type: "SET_TREE_CACHE_ENTRY",
+            payload: { cacheKey, entry, lastLoadedAt: Date.now() },
           }),
 
         setNodes: (nodes) =>

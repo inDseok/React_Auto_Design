@@ -37,6 +37,12 @@ export function insertNewGroupRow(rows, targetRowId) {
   const idx = rows.findIndex((r) => r.id === targetRowId);
   if (idx === -1) return rows;
 
+  return insertNewGroupAt(rows, idx + 1);
+}
+
+export function insertNewGroupAt(rows, insertIndex) {
+  const normalizedIndex = Math.max(0, Math.min(insertIndex, rows.length));
+
   const newRow = {
     id: uuidv4(),
 
@@ -56,7 +62,7 @@ export function insertNewGroupRow(rows, targetRowId) {
   };
 
   const newRows = [...rows];
-  newRows.splice(idx + 1, 0, newRow);
+  newRows.splice(normalizedIndex, 0, newRow);
   return newRows;
 }
 

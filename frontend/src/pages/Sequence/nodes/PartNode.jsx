@@ -2,7 +2,7 @@ import React from "react";
 import { Handle, Position } from "@xyflow/react";
 
 export default function PartNode({ data, selected }) {
-  const { partBase,PartId, inhouse, statusLabel } = data;
+  const { partBase,PartId, inhouse, statusLabel, isAssemblyImported } = data;
 
   return (
     <div
@@ -10,10 +10,14 @@ export default function PartNode({ data, selected }) {
         width: 180,
         height: 80,
         borderRadius: 8,
-        border: selected ? "2px solid #2563eb" : "1px solid #cbd5e1",
-        background: "#f8fafc",
+        border: selected
+          ? `2px solid ${isAssemblyImported ? "#0f766e" : "#2563eb"}`
+          : `1px solid ${isAssemblyImported ? "#99f6e4" : "#cbd5e1"}`,
+        background: isAssemblyImported ? "#ecfeff" : "#f8fafc",
         boxShadow: selected
-          ? "0 0 0 2px rgba(37,99,235,0.15)"
+          ? isAssemblyImported
+            ? "0 0 0 2px rgba(15,118,110,0.15)"
+            : "0 0 0 2px rgba(37,99,235,0.15)"
           : "0 1px 3px rgba(0,0,0,0.1)",
         fontSize: 12,
         position: "relative",
@@ -36,11 +40,15 @@ export default function PartNode({ data, selected }) {
             fontSize: 10,
             padding: "2px 6px",
             borderRadius: 6,
-            background: inhouse ? "#2563eb" : "#64748b",
+            background: isAssemblyImported
+              ? "#0f766e"
+              : inhouse
+                ? "#2563eb"
+                : "#64748b",
             color: "#fff",
           }}
         >
-          {inhouse ? "IN" : "OUT"}
+          {isAssemblyImported ? "ASM" : inhouse ? "IN" : "OUT"}
         </div>
       </div>
       
@@ -80,13 +88,13 @@ export default function PartNode({ data, selected }) {
         type="target"
         position={Position.Left}
         id="in"
-        style={{ background: "#2563eb" }}
+        style={{ background: isAssemblyImported ? "#0f766e" : "#2563eb" }}
       />
       <Handle
         type="source"
         position={Position.Right}
         id="out"
-        style={{ background: "#2563eb" }}
+        style={{ background: isAssemblyImported ? "#0f766e" : "#2563eb" }}
       />
     </div>
   );

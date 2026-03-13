@@ -4,19 +4,24 @@ function AssemblySelector({
   sheets,
   parts,
   options,
+  insertPositions,
 
   selectedSheet,
   selectedPart,
   selectedOption,
+  selectedInsertPosition,
 
   onChangeSheet,
   onChangePart,
   onChangeOption,
+  onChangeInsertPosition,
 
   onAdd,
+  onLoad,
   onSave,
   onAutoMatch,
   onReset,
+  canSave = true,
 }) {
   return (
     <div
@@ -69,8 +74,20 @@ function AssemblySelector({
         ))}
       </select>
 
+      <select
+        value={selectedInsertPosition}
+        onChange={(e) => onChangeInsertPosition(e.target.value)}
+      >
+        {(insertPositions || []).map((pos) => (
+          <option key={pos.value} value={pos.value}>
+            {pos.label}
+          </option>
+        ))}
+      </select>
+
       <button onClick={onAdd}>추가</button>
-      <button onClick={onSave}>저장</button>
+      <button onClick={onLoad}>불러오기</button>
+      <button onClick={onSave} disabled={!canSave}>저장</button>
       <button onClick={onAutoMatch}>자동 추가</button>
       <button onClick={onReset}>초기화</button>
 

@@ -62,7 +62,11 @@ export default function SidebarNav({ collapsed, setCollapsed }) {
 
       
       <Link
-        to="/time"
+        to={
+          state.bomId && state.selectedSpec
+            ? `/time?bomId=${state.bomId}&spec=${encodeURIComponent(state.selectedSpec)}`
+            : "/time"
+        }
         className={`nav-item ${location.pathname === "/time" ? "active" : ""}`}
       >
         <FaClock className="nav-icon" />

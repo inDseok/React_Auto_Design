@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useApp } from "../../state/AppContext";
-import { apiPatch, apiDelete, apiPost } from "../../api/client";
+import { apiGet, apiPatch, apiDelete, apiPost } from "../../api/client";
 
 import {
   Card,
@@ -14,6 +14,8 @@ import {
   Popconfirm,
   message,
   Checkbox,
+  List,
+  Tag,
 } from "antd";
 
 export default function SelectedPartPanel({ node, onUpdateNodes }) {
@@ -22,6 +24,9 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
 
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
+  const [formValues, setFormValues] = useState({});
+  const [suggestions, setSuggestions] = useState([]);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
 
   // node 변경 시 form 초기화
   useEffect(() => {
@@ -38,9 +43,58 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
       type: node.type ?? "PART",
       inhouse: node.inhouse ?? false  
     });
+    setFormValues({
+      id: node.id ?? "",
+      part_no: node.part_no ?? "",
+      material: node.material ?? "",
+      qty: node.qty ?? "",
+      type: node.type ?? "PART",
+      inhouse: node.inhouse ?? false,
+    });
+    setSuggestions([]);
 
     setErr("");
   }, [node, form]);
+
+  useEffect(() => {
+    if (!node || !state.bomId || !state.selectedSpec) {
+      setSuggestions([]);
+      return;
+    }
+
+    const isInhouse = formValues.inhouse === true;
+    const queryName = String(formValues.id ?? "").trim();
+    const queryPartNo = String(formValues.part_no ?? "").trim();
+
+    if (!isInhouse || (!queryName && !queryPartNo)) {
+      setSuggestions([]);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setLoadingSuggestions(true);
+      try {
+        const params = new URLSearchParams({
+          spec: state.selectedSpec,
+          limit: "5",
+        });
+        if (queryName) params.set("name", queryName);
+        if (queryPartNo) params.set("part_no", queryPartNo);
+
+        const data = await apiGet(
+          `/api/sub/bom/${encodeURIComponent(state.bomId)}/part-suggestions?${params.toString()}`
+        );
+        setSuggestions(Array.isArray(data?.items) ? data.items : []);
+      } catch (e) {
+        console.error("추천 조회 실패:", e);
+        setSuggestions([]);
+      } finally {
+        setLoadingSuggestions(false);
+      }
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [formValues.id, formValues.inhouse, formValues.part_no, node, state.bomId, state.selectedSpec]);
 
   if (!node) {
     return (
@@ -69,18 +123,21 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
             ? null
             : Number(values.qty),
         type: values.type || "PART",
-        inhouse: values.inhouse ?? false
+        inhouse: values.inhouse ?? false,
+        recommended_part_base: values.recommended_part_base || null,
+        recommended_source_sheet: values.recommended_source_sheet || null,
+        recommended_match_score: formValues.recommended_match_score || null,
       };
       
       const updatedTree = await apiPatch(
         `/api/sub/bom/${encodeURIComponent(state.bomId)}/node/${encodeURIComponent(
           node.id
-        )}`,
+        )}?spec=${encodeURIComponent(state.selectedSpec)}`,
         payload
       );
 
       onUpdateNodes(updatedTree.nodes);
-      actions.setSelectedNode(values.id);
+      actions.setSelectedNode(node.name);
 
       message.success("저장되었습니다.");
     } catch (e) {
@@ -155,8 +212,47 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
     actions.setSelectedNode(null);
   }
 
+  async function handleApplySuggestion(item) {
+    if (!state.bomId || !state.selectedSpec || !node) {
+      return;
+    }
+
+    try {
+      setSaving(true);
+
+      const payload = {
+        recommended_part_base: item.db_part_raw,
+        recommended_source_sheet: item.sheet,
+        recommended_match_score: {
+          combined: item.score_combined,
+          rapidfuzz: item.score_rapidfuzz,
+          jaro_winkler: item.score_jaro_winkler,
+          source: "sub-manual-recommendation",
+        },
+      };
+
+      const updatedTree = await apiPatch(
+        `/api/sub/bom/${encodeURIComponent(state.bomId)}/node/${encodeURIComponent(node.id)}?spec=${encodeURIComponent(state.selectedSpec)}`,
+        payload
+      );
+
+      onUpdateNodes(updatedTree.nodes);
+      form.setFieldsValue(payload);
+      setFormValues((prev) => ({ ...prev, ...payload }));
+      message.success("시퀀스 추천 부품으로 반영되었습니다.");
+    } catch (e) {
+      setErr(String(e?.message ?? e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
-    <Card title="선택된 부품" style={{ minWidth: 260 }}>
+    <Card
+      title="선택된 부품"
+      style={{ minWidth: 260, height: "100%", display: "flex", flexDirection: "column" }}
+      bodyStyle={{ flex: 1, minHeight: 0, overflowY: "auto", paddingRight: 12 }}
+    >
       {err && (
         <Alert
           type="error"
@@ -166,7 +262,12 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
         />
       )}
   
-      <Form layout="vertical" form={form} onFinish={onSave}>
+      <Form
+        layout="vertical"
+        form={form}
+        onFinish={onSave}
+        onValuesChange={(_, allValues) => setFormValues(allValues)}
+      >
         {!node && (
           <p>선택된 부품이 없습니다.</p>
         )}
@@ -202,6 +303,73 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
             >
               <Checkbox>사내 조립</Checkbox>
             </Form.Item>
+
+            <Form.Item name="recommended_part_base" hidden>
+              <Input />
+            </Form.Item>
+
+            <Form.Item name="recommended_source_sheet" hidden>
+              <Input />
+            </Form.Item>
+
+            {node.recommended_part_base && (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 16 }}
+                message={`시퀀스 추천 부품: ${node.recommended_part_base}`}
+                description={`추천 시트: ${node.recommended_source_sheet || "-"}`}
+              />
+            )}
+
+            {formValues.inhouse && (
+              <Card
+                size="small"
+                title="DB 유사 부품 추천"
+                style={{ marginBottom: 16, background: "#f8fbff" }}
+                loading={loadingSuggestions}
+              >
+                {suggestions.length === 0 ? (
+                  <div style={{ color: "#667085" }}>
+                    부품명 또는 품번 기준으로 일치 후보가 없거나 아직 검색 중입니다.
+                  </div>
+                ) : (
+                  <List
+                    size="small"
+                    dataSource={suggestions}
+                    renderItem={(item) => (
+                      <List.Item
+                        actions={[
+                          <Button
+                            key="apply"
+                            size="small"
+                            onClick={() => handleApplySuggestion(item)}
+                          >
+                            적용
+                          </Button>,
+                        ]}
+                      >
+                        <List.Item.Meta
+                          title={
+                            <Space wrap>
+                              <span>{item.db_part_raw}</span>
+                              <Tag color="blue">{item.sheet}</Tag>
+                            </Space>
+                          }
+                          description={
+                            <Space wrap size={[8, 4]}>
+                              <span>종합 {item.score_combined}</span>
+                              <span>JW {item.score_jaro_winkler}</span>
+                              <span>RF {item.score_rapidfuzz}</span>
+                            </Space>
+                          }
+                        />
+                      </List.Item>
+                    )}
+                  />
+                )}
+              </Card>
+            )}
 
             <Space>
               <Button type="primary" htmlType="submit" loading={saving}>
