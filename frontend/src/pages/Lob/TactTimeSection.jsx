@@ -166,13 +166,13 @@ export function TactTimeSection({ inputs, onChange }) {
           unit="개/일"
         />
         <ResultCard
-          label="라인당 택트타임"
+          label="라인당 Tact Time"
           value={formatNumber(calculated.lineTactMinutes)}
           unit="분"
           accent="#0f766e"
         />
         <ResultCard
-          label="라인당 택트타임"
+          label="라인당 Tact Time"
           value={formatNumber(calculated.lineTactSeconds)}
           unit="초"
           accent="#b45309"

@@ -1,13 +1,15 @@
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.encoders import jsonable_encoder
 from pathlib import Path
 import json
+import os
 from openpyxl import load_workbook
 from typing import List, Dict
 from functools import lru_cache
 from backend.Assembly.auto_match import (
     load_db_rows,
     match_one_best,
-    JW_THRESHOLD,
+    COMBINED_THRESHOLD,
     TOPK,
 )
 from backend.sequence.schema import SequenceSaveRequest
@@ -20,9 +22,62 @@ router = APIRouter(
 DATA_DIR = Path("backend")
 
 
+def _write_json_atomic(path: Path, payload: Dict) -> None:
+    temp_path = path.with_suffix(f"{path.suffix}.tmp")
+    content = json.dumps(payload, ensure_ascii=False, indent=2)
+
+    try:
+        temp_path.write_text(content, encoding="utf-8")
+        os.replace(temp_path, path)
+    except PermissionError:
+        path.write_text(content, encoding="utf-8")
+        if temp_path.exists():
+            temp_path.unlink()
+
+
 @lru_cache(maxsize=4)
 def _get_cached_db_rows(excel_path_str: str, mtime: float):
     return load_db_rows(Path(excel_path_str))
+
+
+def _format_tree_label(node: Dict) -> str:
+    for key in ("id", "part_no", "name"):
+        value = node.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return "ROOT"
+
+
+def _build_tree_path_map(nodes: List[Dict]) -> Dict[str, List[str]]:
+    node_by_name = {}
+    for node in nodes:
+        node_name = str(node.get("name") or "").strip()
+        if node_name:
+            node_by_name[node_name] = node
+
+    path_cache: Dict[str, List[str]] = {}
+
+    def resolve_path(node_name: str) -> List[str]:
+        if not node_name:
+            return []
+        if node_name in path_cache:
+            return path_cache[node_name]
+
+        node = node_by_name.get(node_name)
+        if not node:
+            path_cache[node_name] = []
+            return []
+
+        parent_name = str(node.get("parent_name") or "").strip()
+        parent_path = resolve_path(parent_name) if parent_name else []
+        current_label = _format_tree_label(node)
+        path_cache[node_name] = [*parent_path, current_label]
+        return path_cache[node_name]
+
+    for node_name in node_by_name:
+        resolve_path(node_name)
+
+    return path_cache
 
 
 @router.get("/inhouse-parts")
@@ -72,6 +127,7 @@ def get_inhouse_parts(bomId: str, spec: str):
 
     parts = []
     query_cache = {}
+    tree_path_map = _build_tree_path_map(nodes)
 
     # =========================
     # 3. inhouse PART + auto-match
@@ -84,6 +140,7 @@ def get_inhouse_parts(bomId: str, spec: str):
 
         part_id = n.get("id")
         part_name = n.get("name") or part_id
+        node_name = str(n.get("name") or "").strip()
         recommended_part_base = n.get("recommended_part_base")
         recommended_source_sheet = n.get("recommended_source_sheet")
         recommended_match_score = n.get("recommended_match_score")
@@ -112,16 +169,17 @@ def get_inhouse_parts(bomId: str, spec: str):
                     )
                     query_cache[query_raw] = candidate
 
-                if candidate and candidate["score_jw"] >= JW_THRESHOLD:
+                if candidate and candidate["score_combined"] >= COMBINED_THRESHOLD:
                     best = candidate
                     break
 
         if recommended_part_base and recommended_source_sheet:
             pass
-        elif best and best["score_jw"] >= JW_THRESHOLD:
+        elif best and best["score_combined"] >= COMBINED_THRESHOLD:
             part_base = best["db_part_raw"]
             source_sheet = best["sheet"]
             match_score = {
+                "combined": float(best["score_combined"]),
                 "rapidfuzz": float(best["score_rapidfuzz"]),
                 "jaro_winkler": float(best["score_jw"]),
             }
@@ -134,6 +192,9 @@ def get_inhouse_parts(bomId: str, spec: str):
             "partId": part_id,
             "partName": part_name,
             "inhouse": True,
+            "treePath": tree_path_map.get(node_name, []),
+            "parentName": n.get("parent_name"),
+            "nodeName": node_name,
 
             # 🔑 Inspector / Palette 핵심 메타
             "partBase": part_base,
@@ -408,19 +469,18 @@ def save_sequence(req: SequenceSaveRequest):
 
     save_path = save_dir / f"{spec}_sequence.json"
 
-    with open(save_path, "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "bomId": bom_id,
-                "spec": spec,
-                "nodes": req.nodes,
-                "edges": req.edges,
-                "groups": req.groups or [],
-            },
-            f,
-            ensure_ascii=False,
-            indent=2,
-        )
+    payload = jsonable_encoder(
+        {
+            "bomId": bom_id,
+            "spec": spec,
+            "nodes": req.nodes,
+            "edges": req.edges,
+            "groups": req.groups or [],
+            "workerGroups": req.workerGroups or [],
+        }
+    )
+
+    _write_json_atomic(save_path, payload)
 
     return {"status": "ok"}
 

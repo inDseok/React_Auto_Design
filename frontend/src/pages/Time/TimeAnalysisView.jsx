@@ -59,23 +59,6 @@ export default function TimeAnalysisView({
 
   return (
     <div style={{ padding: 24, display: "grid", gap: 16 }}>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "end",
-          gap: 12,
-          flexWrap: "wrap",
-        }}
-      >
-        <div>
-          <h2 style={{ margin: 0 }}>작업시간 분석표</h2>
-          <div style={{ marginTop: 6, color: "#6b7280", fontSize: 14 }}>
-            BOM `{bomId}` / 사양 `{spec}` 기준 조립 총공수 보기
-          </div>
-        </div>
-      </div>
-
       <TimeSummaryCards summary={summary} />
 
       <div

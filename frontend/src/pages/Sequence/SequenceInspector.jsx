@@ -3,15 +3,66 @@
 // - PROCESS → /process/options
 // - type에 따라 API 분기
 
-import React, { useMemo, useEffect, useState } from "react";
+import React, { useMemo, useEffect, useState, useRef } from "react";
 
 const API_BASE = "http://localhost:8000";
+
+function serializeSequenceNode(node, idx) {
+  return {
+    id: node.id,
+    type: node.type,
+    position:
+      node.position && typeof node.position.x === "number" && typeof node.position.y === "number"
+        ? node.position
+        : {
+            x: 100 + (idx % 5) * 220,
+            y: 100 + Math.floor(idx / 5) * 120,
+          },
+    data: node.data || {},
+  };
+}
+
+function serializeSequenceEdge(edge) {
+  return {
+    id: edge.id,
+    source: edge.source,
+    target: edge.target,
+    type: edge.type || "smoothstep",
+    sourceHandle: edge.sourceHandle ?? "out",
+    targetHandle: edge.targetHandle ?? "in",
+    data: edge.data || {},
+  };
+}
+
+function serializeSequenceGroup(group) {
+  return {
+    id: group.id,
+    label: group.label || "",
+    nodeIds: Array.isArray(group.nodeIds) ? group.nodeIds : [],
+  };
+}
+
+function normalizeRepeatWeightValue(value) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return 1;
+  }
+
+  return Math.max(1, Math.round(numericValue * 10) / 10);
+}
+
+function formatRepeatWeightInput(value) {
+  return String(normalizeRepeatWeightValue(value));
+}
 
 export default function SequenceInspector({
   nodes,
   edges,
-  groups,       
-  setGroups,     
+  groups,
+  workerGroups,
+  setGroups,
+  setWorkerGroups,
+  flowControls,
   selectedNodeId,
   selectedEdgeId,
   setNodes,
@@ -28,6 +79,18 @@ export default function SequenceInspector({
     () => edges.find((e) => e.id === selectedEdgeId),
     [edges, selectedEdgeId]
   );
+
+  const selectedWorkerGroup = useMemo(
+    () =>
+      workerGroups.find((group) =>
+        (group.nodeIds || []).includes(selectedNodeId)
+      ) || null,
+    [workerGroups, selectedNodeId]
+  );
+  const selectedNodeType = selectedNode?.type || "";
+  const selectedNodePartBase = selectedNode?.data?.partBase || "";
+  const selectedNodeSourceSheet = selectedNode?.data?.sourceSheet || "";
+  const [repeatWeightInput, setRepeatWeightInput] = useState("1");
 
   /* =========================
      update utils
@@ -52,30 +115,151 @@ export default function SequenceInspector({
     );
   };
 
+  useEffect(() => {
+    if (selectedNode?.type === "PART" || selectedNode?.type === "PROCESS") {
+      setRepeatWeightInput(formatRepeatWeightInput(selectedNode.data?.repeatWeight ?? 1));
+      return;
+    }
+
+    setRepeatWeightInput("1");
+  }, [selectedNode]);
+
+  const commitRepeatWeight = (rawValue) => {
+    updateNodeData({
+      repeatWeight: normalizeRepeatWeightValue(rawValue),
+    });
+    setRepeatWeightInput(formatRepeatWeightInput(rawValue));
+  };
+
+  const updateWorkerForNode = (workerLabel) => {
+    if (!selectedNodeId) return;
+
+    const normalizedLabel = String(workerLabel || "").trim();
+
+    flowControls?.applyFlowChange((prev) => {
+      const nextNodes = prev.nodes.map((node) =>
+        node.id === selectedNodeId
+          ? {
+              ...node,
+              data: {
+                ...node.data,
+                worker: normalizedLabel,
+              },
+            }
+          : node
+      );
+
+      const strippedWorkerGroups = (prev.workerGroups || [])
+        .map((group) => ({
+          ...group,
+          nodeIds: (group.nodeIds || []).filter((nodeId) => nodeId !== selectedNodeId),
+        }))
+        .filter((group) => (group.nodeIds || []).length > 0);
+
+      if (!normalizedLabel) {
+        return {
+          ...prev,
+          nodes: nextNodes,
+          workerGroups: strippedWorkerGroups,
+        };
+      }
+
+      const existingGroup = strippedWorkerGroups.find(
+        (group) => String(group.label || "").trim() === normalizedLabel
+      );
+
+      let nextWorkerGroups;
+      if (existingGroup) {
+        nextWorkerGroups = strippedWorkerGroups.map((group) =>
+          group.id === existingGroup.id
+            ? {
+                ...group,
+                nodeIds: [...(group.nodeIds || []), selectedNodeId],
+              }
+            : group
+        );
+      } else {
+        nextWorkerGroups = [
+          ...strippedWorkerGroups,
+          {
+            id: `wrk-${crypto.randomUUID()}`,
+            nodeIds: [selectedNodeId],
+            label: normalizedLabel,
+          },
+        ];
+      }
+
+      return {
+        ...prev,
+        nodes: nextNodes,
+        workerGroups: nextWorkerGroups,
+      };
+    });
+  };
+
+  const deleteSelectedWorkerGroup = () => {
+    if (!selectedWorkerGroup) return;
+
+    const nodeIdsInGroup = new Set(selectedWorkerGroup.nodeIds || []);
+    flowControls?.applyFlowChange((prev) => ({
+      ...prev,
+      nodes: prev.nodes.map((node) =>
+        nodeIdsInGroup.has(node.id)
+          ? {
+              ...node,
+              data: {
+                ...node.data,
+                worker: "",
+              },
+            }
+          : node
+      ),
+      workerGroups: (prev.workerGroups || []).filter(
+        (group) => group.id !== selectedWorkerGroup.id
+      ),
+    }));
+  };
+
   /* =========================
      OPTION state
   ========================= */
   const [options, setOptions] = useState([]);
   const [optionLoading, setOptionLoading] = useState(false);
   const [optionError, setOptionError] = useState(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   // nodeId -> options cache
   const [optionCache, setOptionCache] = useState({});
+  const [optionQueryCache, setOptionQueryCache] = useState({});
+  const inFlightOptionRequestsRef = useRef({});
 
   /* =========================
      OPTION fetch (type별 분기)
   ========================= */
   useEffect(() => {
-    if (!selectedNode) return;
+    if (!selectedNodeId) return;
+    if (isSaving) return;
 
-    const { type, data } = selectedNode;
-    const { partBase, sourceSheet } = data || {};
+    const type = selectedNodeType;
+    const partBase = selectedNodePartBase;
+    const sourceSheet = selectedNodeSourceSheet;
     if (!partBase || !sourceSheet) return;
 
-    const nodeId = selectedNode.id;
+    const nodeId = selectedNodeId;
+    const requestKey = `${type}:${partBase}:${sourceSheet}`;
 
     if (optionCache[nodeId]) {
       setOptions(optionCache[nodeId]);
+      return;
+    }
+
+    if (optionQueryCache[requestKey]) {
+      const cachedOptions = optionQueryCache[requestKey];
+      setOptionCache((prev) => ({
+        ...prev,
+        [nodeId]: cachedOptions,
+      }));
+      setOptions(cachedOptions);
       return;
     }
 
@@ -87,22 +271,38 @@ export default function SequenceInspector({
     setOptionLoading(true);
     setOptionError(null);
 
-    fetch(
-      `${API_BASE}${endpoint}?partBase=${encodeURIComponent(
-        partBase
-      )}&sourceSheet=${encodeURIComponent(sourceSheet)}`,
-      { credentials: "include" }
-    )
-      .then((res) => {
-        if (!res.ok) throw new Error("OPTION 조회 실패");
-        return res.json();
-      })
+    const pendingRequest = inFlightOptionRequestsRef.current[requestKey];
+    const requestPromise =
+      pendingRequest ||
+      fetch(
+        `${API_BASE}${endpoint}?partBase=${encodeURIComponent(
+          partBase
+        )}&sourceSheet=${encodeURIComponent(sourceSheet)}`,
+        { credentials: "include" }
+      )
+        .then((res) => {
+          if (!res.ok) throw new Error("OPTION 조회 실패");
+          return res.json();
+        })
+        .finally(() => {
+          delete inFlightOptionRequestsRef.current[requestKey];
+        });
+
+    if (!pendingRequest) {
+      inFlightOptionRequestsRef.current[requestKey] = requestPromise;
+    }
+
+    requestPromise
       .then((data) => {
         const opts = data.options || [];
 
         setOptionCache((prev) => ({
           ...prev,
           [nodeId]: opts,
+        }));
+        setOptionQueryCache((prev) => ({
+          ...prev,
+          [requestKey]: opts,
         }));
 
         setOptions(opts);
@@ -115,24 +315,39 @@ export default function SequenceInspector({
       .finally(() => {
         setOptionLoading(false);
       });
-  }, [selectedNodeId]);
+  }, [
+    isSaving,
+    optionCache,
+    optionQueryCache,
+    selectedNodeId,
+    selectedNodePartBase,
+    selectedNodeSourceSheet,
+    selectedNodeType,
+  ]);
 
   const saveSequence = async () => {
     if (!bomId || !spec) {
       alert("bomId / spec 없음");
       return;
     }
-  
-    const safeNodes = nodes.map((n, idx) => ({
-      ...n,
-      position: n.position ?? {
-        x: 100 + (idx % 5) * 220,
-        y: 100 + Math.floor(idx / 5) * 120,
-      },
-    }));
+
+    const latestFlowState = flowControls?.getFlowState?.() || {
+      nodes,
+      edges,
+      groups,
+      workerGroups,
+    };
+
+    const safeNodes = (latestFlowState.nodes || []).map(serializeSequenceNode);
+    const safeEdges = (latestFlowState.edges || []).map(serializeSequenceEdge);
+    const safeGroups = (latestFlowState.groups || []).map(serializeSequenceGroup);
+    const safeWorkerGroups = (latestFlowState.workerGroups || []).map(
+      serializeSequenceGroup
+    );
   
     try {
-      await fetch(`${API_BASE}/api/sequence/save`, {
+      setIsSaving(true);
+      const res = await fetch(`${API_BASE}/api/sequence/save`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -140,15 +355,23 @@ export default function SequenceInspector({
           bomId,
           spec,
           nodes: safeNodes,
-          edges,
-          groups,
+          edges: safeEdges,
+          groups: safeGroups,
+          workerGroups: safeWorkerGroups,
         }),
       });
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "시퀀스 저장 실패");
+      }
   
       alert("시퀀스 저장 완료");
     } catch (e) {
       console.error(e);
-      alert("저장 실패");
+      alert(`저장 실패: ${e.message || "알 수 없는 오류"}`);
+    } finally {
+      setIsSaving(false);
     }
   };
   
@@ -179,10 +402,21 @@ export default function SequenceInspector({
               y: 100 + Math.floor(idx / 5) * 120,
             },
       }));
+      const safeEdges = (data.edges || []).map((edge) => ({
+        ...edge,
+        sourceHandle: edge.sourceHandle ?? "out",
+        targetHandle: edge.targetHandle ?? "in",
+      }));
   
-      setNodes(safeNodes);
-      setEdges(data.edges || []);
-      setGroups?.(data.groups || []);
+      flowControls?.replaceFlowState(
+        {
+          nodes: safeNodes,
+          edges: safeEdges,
+          groups: data.groups || [],
+          workerGroups: data.workerGroups || [],
+        },
+        { recordHistory: false }
+      );
   
       alert("시퀀스 불러오기 완료");
     } catch (e) {
@@ -287,19 +521,40 @@ export default function SequenceInspector({
   
             {(type === "PART" || type === "PROCESS") && (
               <>
+                <Label>작업자</Label>
+                <input
+                  style={inputStyle}
+                  value={data.worker || ""}
+                  placeholder="예: 1"
+                  onChange={(e) => updateWorkerForNode(e.target.value)}
+                />
+
                 <Label>반복 횟수 가중치</Label>
                 <input
                   type="number"
                   min={1}
-                  step={0.01}
+                  step={0.1}
                   style={inputStyle}
-                  value={data.repeatWeight ?? 1}
-                  onChange={(e) =>
-                    updateNodeData({
-                      repeatWeight: Math.max(1, Number(e.target.value || 0)),
-                    })
-                  }
+                  value={repeatWeightInput}
+                  onChange={(e) => setRepeatWeightInput(e.target.value)}
+                  onBlur={(e) => commitRepeatWeight(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      commitRepeatWeight(e.currentTarget.value);
+                      e.currentTarget.blur();
+                    }
+                  }}
                 />
+
+                {selectedWorkerGroup && (
+                  <button
+                    type="button"
+                    style={dangerButtonStyle}
+                    onClick={deleteSelectedWorkerGroup}
+                  >
+                    현재 작업자 그룹 삭제
+                  </button>
+                )}
               </>
             )}
           </Section>
@@ -363,6 +618,15 @@ const btnStyle = {
   border: "1px solid #cbd5e1",
   background: "#f8fafc",
   cursor: "pointer",
+};
+
+const dangerButtonStyle = {
+  ...btnStyle,
+  width: "100%",
+  marginBottom: 12,
+  border: "1px solid #f5c2c7",
+  background: "#fff5f5",
+  color: "#b42318",
 };
 
 

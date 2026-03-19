@@ -172,6 +172,98 @@ def _infer_sequence_node_type(source_sheet: str) -> str:
     return "PART"
 
 
+def _resolve_sequence_option(
+    part_base: str,
+    option: str,
+    source_sheet: str,
+) -> tuple[str, str]:
+    normalized_part = _as_clean_str(part_base)
+    normalized_option = _as_clean_str(option)
+    normalized_sheet = _as_clean_str(source_sheet)
+
+    if not normalized_part:
+        return "", normalized_sheet
+
+    if normalized_option:
+        return normalized_option, normalized_sheet
+
+    ensure_assembly_cache()
+    options_by_sheet = ASSEMBLY_CACHE.get("options", {})
+
+    if normalized_sheet and normalized_sheet in options_by_sheet:
+        sheet_options = options_by_sheet[normalized_sheet].get(normalized_part, [])
+        if len(sheet_options) == 1:
+            return _as_clean_str(sheet_options[0]), normalized_sheet
+
+    candidate_pairs = []
+    unique_options = []
+    seen_options = set()
+    for sheet_name, by_part in options_by_sheet.items():
+        part_options = by_part.get(normalized_part, [])
+        for part_option in part_options:
+            clean_option = _as_clean_str(part_option)
+            if not clean_option:
+                continue
+            candidate_pairs.append((sheet_name, clean_option))
+            if clean_option not in seen_options:
+                seen_options.add(clean_option)
+                unique_options.append(clean_option)
+
+    if len(candidate_pairs) == 1:
+        sheet_name, clean_option = candidate_pairs[0]
+        return clean_option, normalized_sheet or sheet_name
+
+    if len(unique_options) == 1:
+        return unique_options[0], normalized_sheet
+
+    return "", normalized_sheet
+
+
+def _find_task_rows_for_sequence_entry(
+    tasks_by_sheet: Dict[str, Any],
+    sheet: str,
+    part_base: str,
+    option: str,
+) -> List[Dict[str, Any]]:
+    by_part = tasks_by_sheet.get(sheet, {})
+    if not isinstance(by_part, dict):
+        return []
+
+    if part_base in by_part:
+        by_option = by_part.get(part_base, {})
+        if isinstance(by_option, dict):
+            if option in by_option:
+                rows = by_option.get(option, [])
+                if isinstance(rows, list) and rows:
+                    return rows
+
+            normalized_option = normalize(option)
+            if normalized_option:
+                for raw_option, rows in by_option.items():
+                    if normalize(raw_option) == normalized_option and isinstance(rows, list) and rows:
+                        return rows
+
+    normalized_part = normalize(part_base)
+    normalized_option = normalize(option)
+    if not normalized_part:
+        return []
+
+    for raw_part, by_option in by_part.items():
+        if normalize(raw_part) != normalized_part or not isinstance(by_option, dict):
+            continue
+
+        if option in by_option:
+            rows = by_option.get(option, [])
+            if isinstance(rows, list) and rows:
+                return rows
+
+        for raw_option, rows in by_option.items():
+            if normalize(raw_option) == normalized_option and isinstance(rows, list) and rows:
+                return rows
+
+    return []
+
+
 def _build_effective_assembly_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     effective_rows = [dict(row) for row in rows if isinstance(row, dict)]
     columns = ["부품 기준", "요소작업", "OPTION"]
@@ -266,6 +358,10 @@ def _build_sequence_groups_from_assembly_rows(rows: List[Dict[str, Any]]) -> Lis
     return groups
 
 
+def _build_worker_group_key(group_key: str, worker: str) -> str:
+    return f"{group_key}::WORKER::{worker}"
+
+
 def _sync_sequence_json_from_assembly_rows(bom_id: str, spec: str, rows: List[Dict[str, Any]]) -> None:
     sequence_path = DATA_DIR / "bom_runs" / bom_id / f"{spec}_sequence.json"
     if not sequence_path.exists():
@@ -278,10 +374,13 @@ def _sync_sequence_json_from_assembly_rows(bom_id: str, spec: str, rows: List[Di
 
     existing_nodes = payload.get("nodes", [])
     existing_groups = payload.get("groups", [])
+    existing_worker_groups = payload.get("workerGroups", [])
     if not isinstance(existing_nodes, list):
         existing_nodes = []
     if not isinstance(existing_groups, list):
         existing_groups = []
+    if not isinstance(existing_worker_groups, list):
+        existing_worker_groups = []
 
     node_by_id: Dict[str, Dict[str, Any]] = {}
     node_by_sync_key: Dict[str, Dict[str, Any]] = {}
@@ -324,9 +423,18 @@ def _sync_sequence_json_from_assembly_rows(bom_id: str, spec: str, rows: List[Di
                         ordered_nodes.append(node)
             existing_group_nodes_by_key[normalized_group_key] = ordered_nodes
 
+    worker_group_meta_by_key: Dict[str, Dict[str, Any]] = {}
+    for worker_group in existing_worker_groups:
+        if not isinstance(worker_group, dict):
+            continue
+        worker_group_key = _as_clean_str(worker_group.get("assemblyWorkerKey"))
+        if worker_group_key:
+            worker_group_meta_by_key[worker_group_key] = worker_group
+
     rebuilt_groups = _build_sequence_groups_from_assembly_rows(rows)
     next_nodes: List[Dict[str, Any]] = []
     next_groups: List[Dict[str, Any]] = []
+    next_worker_groups: List[Dict[str, Any]] = []
     next_edges: List[Dict[str, Any]] = []
 
     for group_index, group in enumerate(rebuilt_groups):
@@ -340,6 +448,7 @@ def _sync_sequence_json_from_assembly_rows(bom_id: str, spec: str, rows: List[Di
             group_id = existing_group_id or f"grp-{uuid4()}"
 
         node_ids: List[str] = []
+        worker_node_ids: Dict[str, List[str]] = {}
 
         for block_index, block in enumerate(group["blocks"]):
             instance_key = _as_clean_str(block.get("instanceKey"))
@@ -424,6 +533,8 @@ def _sync_sequence_json_from_assembly_rows(bom_id: str, spec: str, rows: List[Di
 
             next_nodes.append(next_node)
             node_ids.append(node_id)
+            if worker:
+                worker_node_ids.setdefault(worker, []).append(node_id)
 
         next_groups.append({
             "id": group_id,
@@ -431,6 +542,19 @@ def _sync_sequence_json_from_assembly_rows(bom_id: str, spec: str, rows: List[Di
             "label": group.get("groupLabel", ""),
             "assemblyGroupKey": group_key,
         })
+
+        for worker_label, worker_node_id_list in worker_node_ids.items():
+            worker_group_key = _build_worker_group_key(group_key, worker_label)
+            existing_worker_group = worker_group_meta_by_key.get(worker_group_key, {})
+            worker_group_id = _as_clean_str(existing_worker_group.get("id")) or f"wrk-{uuid4()}"
+            next_worker_groups.append({
+                "id": worker_group_id,
+                "nodeIds": worker_node_id_list,
+                "label": worker_label,
+                "assemblyGroupKey": group_key,
+                "assemblyWorkerKey": worker_group_key,
+                "parentGroupId": group_id,
+            })
 
         for index in range(len(node_ids) - 1):
             source_id = node_ids[index]
@@ -444,6 +568,7 @@ def _sync_sequence_json_from_assembly_rows(bom_id: str, spec: str, rows: List[Di
 
     payload["nodes"] = next_nodes
     payload["groups"] = next_groups
+    payload["workerGroups"] = next_worker_groups
     payload["edges"] = next_edges
     sequence_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
@@ -470,8 +595,11 @@ def _load_sequence_entries(root_dir: Path, spec: str) -> List[Dict[str, Any]]:
         edges = []
 
     groups = data.get("groups", [])
+    worker_groups = data.get("workerGroups", [])
     if not isinstance(groups, list):
         groups = []
+    if not isinstance(worker_groups, list):
+        worker_groups = []
 
     node_by_id: Dict[str, Dict[str, Any]] = {}
     node_order: List[str] = []
@@ -488,6 +616,19 @@ def _load_sequence_entries(root_dir: Path, spec: str) -> List[Dict[str, Any]]:
     entries: List[Dict[str, Any]] = []
     index_by_key: Dict[tuple, int] = {}
     ungrouped = set(node_by_id.keys())
+    worker_by_node_id: Dict[str, str] = {}
+
+    for worker_group in worker_groups:
+        if not isinstance(worker_group, dict):
+            continue
+        worker_label = _as_clean_str(worker_group.get("label"))
+        raw_node_ids = worker_group.get("nodeIds", [])
+        if not worker_label or not isinstance(raw_node_ids, list):
+            continue
+        for raw_node_id in raw_node_ids:
+            node_id = _as_clean_str(raw_node_id)
+            if node_id:
+                worker_by_node_id[node_id] = worker_label
 
     def order_group_node_ids(node_ids: List[Any]) -> List[str]:
         normalized_node_ids = [
@@ -600,13 +741,17 @@ def _load_sequence_entries(root_dir: Path, spec: str) -> List[Dict[str, Any]]:
                 continue
 
             part_base = _as_clean_str(payload.get("partBase"))
-            option = _as_clean_str(payload.get("option"))
             source_sheet = _as_clean_str(payload.get("sourceSheet"))
+            option, source_sheet = _resolve_sequence_option(
+                part_base=part_base,
+                option=payload.get("option"),
+                source_sheet=source_sheet,
+            )
             if not part_base or not option:
                 continue
 
             rw = _to_positive_number(payload.get("repeatWeight"))
-            worker = _as_clean_str(payload.get("worker"))
+            worker = _as_clean_str(payload.get("worker")) or worker_by_node_id.get(node_id, "")
 
             add_entry(
                 group_key=group_key,
@@ -628,13 +773,17 @@ def _load_sequence_entries(root_dir: Path, spec: str) -> List[Dict[str, Any]]:
             continue
 
         part_base = _as_clean_str(payload.get("partBase"))
-        option = _as_clean_str(payload.get("option"))
         source_sheet = _as_clean_str(payload.get("sourceSheet"))
+        option, source_sheet = _resolve_sequence_option(
+            part_base=part_base,
+            option=payload.get("option"),
+            source_sheet=source_sheet,
+        )
         if not part_base or not option:
             continue
 
         rw = _to_positive_number(payload.get("repeatWeight"))
-        worker = _as_clean_str(payload.get("worker"))
+        worker = _as_clean_str(payload.get("worker")) or worker_by_node_id.get(node_id, "")
         add_entry(
             group_key=f"SEQ-NODE::{node_id}",
             group_label="",
@@ -812,7 +961,12 @@ def auto_match_assembly(bom_id: str, spec: str):
         )
 
         for sheet in candidate_sheets:
-            rows = tasks_by_sheet.get(sheet, {}).get(part_base, {}).get(option, [])
+            rows = _find_task_rows_for_sequence_entry(
+                tasks_by_sheet=tasks_by_sheet,
+                sheet=sheet,
+                part_base=part_base,
+                option=option,
+            )
             if rows:
                 matched_rows = rows
                 break

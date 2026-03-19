@@ -2,7 +2,8 @@ import React from "react";
 import { Handle, Position } from "@xyflow/react";
 
 export default function PartNode({ data, selected }) {
-  const { partBase,PartId, inhouse, statusLabel, isAssemblyImported } = data;
+  const { inhouse, statusLabel, isAssemblyImported } = data;
+  const handleColor = isAssemblyImported ? "#0f766e" : "#2563eb";
 
   return (
     <div
@@ -88,13 +89,15 @@ export default function PartNode({ data, selected }) {
         type="target"
         position={Position.Left}
         id="in"
-        style={{ background: isAssemblyImported ? "#0f766e" : "#2563eb" }}
+        isConnectable
+        style={{ background: handleColor }}
       />
       <Handle
         type="source"
         position={Position.Right}
         id="out"
-        style={{ background: isAssemblyImported ? "#0f766e" : "#2563eb" }}
+        isConnectable
+        style={{ background: handleColor }}
       />
     </div>
   );

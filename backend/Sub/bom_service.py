@@ -67,18 +67,21 @@ def create_bom_run(binary_data: bytes, original_filename: str) -> Dict[str, Any]
     if not tree_excel_path.exists():
         raise RuntimeError("tree.xlsx가 생성되지 않음")
 
-    # 3. BOM_to_Tree가 생성한 변환 xlsx 찾기
-    # (보통 _converted.xlsx 규칙)
-    converted_candidates = list(root.glob("*_converted.xlsx"))
-    if not converted_candidates:
-        raise RuntimeError("변환된 xlsx 파일을 찾을 수 없음")
+    converted_xlsx = None
+    spec_binary = binary_data if suffix in SUPPORTED_SUFFIX else None
 
-    converted_xlsx = converted_candidates[0]
-    print(f"[BOM] using converted xlsx: {converted_xlsx}")
+    # xls/xlsb 업로드는 BOM_to_Tree가 생성한 변환본에서만 사양 추출 가능
+    if spec_binary is None:
+        converted_candidates = list(root.glob("*_converted.xlsx"))
+        if not converted_candidates:
+            raise RuntimeError("변환된 xlsx 파일을 찾을 수 없음")
 
-    # 4. 변환된 xlsx 기준으로 사양 추출
-    with open(converted_xlsx, "rb") as f:
-        spec_info = extract_specs_from_bom(f.read())
+        converted_xlsx = converted_candidates[0]
+        print(f"[BOM] using converted xlsx: {converted_xlsx}")
+        spec_binary = converted_xlsx.read_bytes()
+
+    # 4. 사양 추출
+    spec_info = extract_specs_from_bom(spec_binary)
 
     if not spec_info.get("sheets"):
         raise RuntimeError("사양 추출 결과가 비어 있음")
@@ -87,7 +90,7 @@ def create_bom_run(binary_data: bytes, original_filename: str) -> Dict[str, Any]
     meta = {
         "bom_id": bom_id,
         "original_filename": original_filename,
-        "converted_xlsx": converted_xlsx.name,
+        "converted_xlsx": converted_xlsx.name if converted_xlsx else None,
         "tree_excel": "tree.xlsx",
         "spec_info": spec_info,
     }

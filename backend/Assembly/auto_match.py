@@ -27,6 +27,7 @@ EXCEL_HEADER_ROW = 1
 ONLY_INHOUSE = True
 TOPK = 5
 JW_THRESHOLD = 90.0
+COMBINED_THRESHOLD = 90.0
 EXCLUDED_MATCH_SHEETS = {"대형램프 DB"}
 
 STOP_TOKENS = {
@@ -110,6 +111,10 @@ def jw_score(a: str, b: str) -> float:
         return 0.0
     # jellyfish는 0~1
     return float(jellyfish.jaro_winkler_similarity(a, b) * 100.0)
+
+
+def combined_score(rf: float, jw: float) -> float:
+    return round((float(rf) * 0.45) + (float(jw) * 0.55), 2)
 
 
 # =========================
@@ -237,6 +242,7 @@ def match_one_best(
                 "db_part_norm": db_rows[idx]["db_part_norm"],
                 "score_rapidfuzz": best_rf,
                 "score_jw": best_jw,
+                "score_combined": combined_score(best_rf, best_jw),
                 # 참고용으로만 유지(지금 단계에서는 반환/저장 안 함)
                 "sheet": db_rows[idx]["sheet"],
                 "row_index": db_rows[idx]["row_index"],

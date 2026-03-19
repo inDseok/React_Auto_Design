@@ -220,7 +220,10 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
     try {
       setSaving(true);
 
+      const nextInhouse = form.getFieldValue("inhouse") ?? formValues.inhouse ?? node.inhouse ?? false;
+
       const payload = {
+        inhouse: nextInhouse,
         recommended_part_base: item.db_part_raw,
         recommended_source_sheet: item.sheet,
         recommended_match_score: {

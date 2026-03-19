@@ -2,6 +2,7 @@ import openpyxl
 from openpyxl.styles import Border, Side, Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 import os
+import pythoncom
 import win32com.client
 
 
@@ -64,13 +65,33 @@ def 변환_xls_to_xlsx_안전(원본파일):
 
     변환파일 = 원본파일.rsplit(".", 1)[0] + "_converted.xlsx"
 
-    excel = win32com.client.Dispatch("Excel.Application")
-    excel.Visible = False
-    excel.DisplayAlerts = False
-    excel.ScreenUpdating = False
-    excel.EnableEvents = False
+    def _set_excel_property(excel_app, name, value):
+        try:
+            setattr(excel_app, name, value)
+            return
+        except Exception as e:
+            print(f"   [경고] Excel 속성 설정 실패 ({name}, direct): {e}")
+
+        try:
+            setattr(excel_app.Application, name, value)
+        except Exception as e:
+            print(f"   [경고] Excel 속성 설정 실패 ({name}, app): {e}")
+
+    pythoncom.CoInitialize()
+    excel = None
+    wb = None
 
     try:
+        try:
+            excel = win32com.client.DispatchEx("Excel.Application")
+        except Exception:
+            excel = win32com.client.Dispatch("Excel.Application")
+
+        _set_excel_property(excel, "Visible", False)
+        _set_excel_property(excel, "DisplayAlerts", False)
+        _set_excel_property(excel, "ScreenUpdating", False)
+        _set_excel_property(excel, "EnableEvents", False)
+
         wb = excel.Workbooks.Open(
             원본파일,
             ReadOnly=True,
@@ -87,7 +108,19 @@ def 변환_xls_to_xlsx_안전(원본파일):
 
 
     finally:
-        excel.Quit()
+        if wb is not None:
+            try:
+                wb.Close(False)
+            except Exception:
+                pass
+
+        if excel is not None:
+            try:
+                excel.Quit()
+            except Exception:
+                pass
+
+        pythoncom.CoUninitialize()
 
     return 변환파일
 

@@ -30,6 +30,7 @@ class SequencePayload(BaseModel):
     nodes: List[Node]
     edges: List[Edge]
     groups: List[Group]
+    workerGroups: Optional[List[Group]] = []
 
 class SequenceSaveRequest(BaseModel):
     bomId: str
@@ -37,3 +38,4 @@ class SequenceSaveRequest(BaseModel):
     nodes: List[Dict[str, Any]]
     edges: List[Dict[str, Any]]
     groups: Optional[List[Dict[str, Any]]] = []
+    workerGroups: Optional[List[Dict[str, Any]]] = []

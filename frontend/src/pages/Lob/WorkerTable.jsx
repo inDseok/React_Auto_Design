@@ -11,7 +11,13 @@ function cellStyle(textAlign) {
   };
 }
 
-export function WorkerTable({ workerStats, movementTimes, onChangeMovementTime }) {
+export function WorkerTable({
+  workerStats,
+  movementTimes,
+  movementTimeInputs,
+  onChangeMovementTime,
+  onCommitMovementTime,
+}) {
   const grandTotals = workerStats.reduce(
     (acc, worker) => {
       const movementTime = movementTimes[worker.worker] ?? 0;
@@ -120,9 +126,16 @@ export function WorkerTable({ workerStats, movementTimes, onChangeMovementTime }
                     <input
                       type="number"
                       min="0"
-                      step="0.01"
-                      value={movementTime}
+                      step="0.1"
+                      value={movementTimeInputs?.[worker.worker] ?? String(movementTime)}
                       onChange={(e) => onChangeMovementTime(worker.worker, e.target.value)}
+                      onBlur={(e) => onCommitMovementTime?.(worker.worker, e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          onCommitMovementTime?.(worker.worker, e.currentTarget.value);
+                          e.currentTarget.blur();
+                        }
+                      }}
                       style={{
                         width: 96,
                         padding: "8px 10px",

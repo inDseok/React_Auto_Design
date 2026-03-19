@@ -10,6 +10,7 @@ export default function ProcessNode({ data, selected }) {
   } = data;
 
   const processName = label || partBase || "공정";
+  const handleColor = isAssemblyImported ? "#8b5cf6" : "#fb923c";
 
   return (
     <div
@@ -73,8 +74,20 @@ export default function ProcessNode({ data, selected }) {
       </div>
 
       {/* Handles */}
-      <Handle type="target" position={Position.Left} />
-      <Handle type="source" position={Position.Right} />
+      <Handle
+        type="target"
+        position={Position.Left}
+        id="in"
+        isConnectable
+        style={{ background: handleColor }}
+      />
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="out"
+        isConnectable
+        style={{ background: handleColor }}
+      />
     </div>
   );
 }

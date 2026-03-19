@@ -74,8 +74,12 @@ export default function SidebarNav({ collapsed, setCollapsed }) {
       </Link>
 
       <Link
-        to="/lob"
-        className={`nav-item ${location.pathname === "/lob" ? "active" : ""}`}
+        to={
+          state.bomId && state.selectedSpec
+            ? `/lob?bomId=${state.bomId}&spec=${encodeURIComponent(state.selectedSpec)}`
+            : "/lob"
+        }
+        className={`nav-item ${location.pathname.startsWith("/lob") ? "active" : ""}`}
       >
         <FaProjectDiagram className="nav-icon" />
         <span className="nav-text">LOB 분석표</span>

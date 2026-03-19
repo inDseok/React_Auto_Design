@@ -10,10 +10,10 @@ export default function SpecSelector() {
   const [specs, setSpecs] = useState([]);
   const [selected, setSelected] = useState("");
   const [loading, setLoading] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [err, setErr] = useState("");
 
   const reqIdRef = useRef(0);
-  const prefetchReqIdRef = useRef(0);
 
   useEffect(() => {
     if (!state.bomId) {
@@ -52,23 +52,16 @@ export default function SpecSelector() {
     loadSpecs();
   }, [state.bomId]);
 
-  function onConfirm() {
+  async function onConfirm() {
     if (!selected) return;
-    actions.setSpec(selected);
-    localStorage.setItem("spec", selected);
-  }
-
-  useEffect(() => {
-    if (!state.bomId || !selected) return;
-
     const cacheKey = `${state.bomId}::${selected}`;
     const cached = state.treeCache?.[cacheKey];
-    if (Array.isArray(cached?.nodes)) return;
 
-    const reqId = ++prefetchReqIdRef.current;
+    setConfirming(true);
+    setErr("");
 
-    async function prefetchTree() {
-      try {
+    try {
+      if (!Array.isArray(cached?.nodes)) {
         const res = await fetch(
           `http://localhost:8000/api/sub/bom/${state.bomId}/tree?spec=${encodeURIComponent(
             selected
@@ -76,21 +69,24 @@ export default function SpecSelector() {
           { credentials: "include" }
         );
 
-        if (!res.ok) return;
+        if (!res.ok) {
+          throw new Error(await res.text());
+        }
 
         const data = await res.json();
-        if (reqId !== prefetchReqIdRef.current) return;
-
         actions.setTreeCacheEntry?.(cacheKey, {
           nodes: data.nodes ?? [],
         });
-      } catch {
-        // 프리패치는 실패해도 UI를 막지 않음
       }
-    }
 
-    prefetchTree();
-  }, [state.bomId, selected, state.treeCache]);
+      actions.setSpec(selected);
+      localStorage.setItem("spec", selected);
+    } catch (e) {
+      setErr(String(e?.message ?? e));
+    } finally {
+      setConfirming(false);
+    }
+  }
 
   if (!state.bomId) {
     return (
@@ -131,7 +127,7 @@ export default function SpecSelector() {
         />
       )}
 
-      <Spin spinning={loading} tip="사양 불러오는 중...">
+      <Spin spinning={loading || confirming} tip={confirming ? "트리 준비 중..." : "사양 불러오는 중..."}>
         <Space.Compact style={{ width: "100%" }}>
           <Select
             placeholder="사양을 선택하세요"
@@ -152,7 +148,7 @@ export default function SpecSelector() {
           <Button
             type="primary"
             onClick={onConfirm}
-            disabled={!selected || loading}
+            disabled={!selected || loading || confirming}
             size="large"
           >
             선택

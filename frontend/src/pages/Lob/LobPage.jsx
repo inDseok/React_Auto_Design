@@ -1,13 +1,12 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useApp } from "../../state/AppContext";
 import { useAssemblyData } from "../Assembly/useAssemblyData";
-import { VerticalBarChart } from "./LobCharts";
+import { EquipmentStackedBarChart, VerticalBarChart } from "./LobCharts";
 import { SummaryCard } from "./LobSummaryCards";
 import { TactTimeSection } from "./TactTimeSection";
 import { WorkerDetailSection } from "./WorkerDetailSection";
 import { WorkerTable } from "./WorkerTable";
-import { downloadWorkerLobExcel } from "./lobExport";
 import {
   buildSummary,
   buildWorkerStats,
@@ -25,9 +24,41 @@ const VIEW_OPTIONS = [
   { key: "equipment", label: "설비 LOB" },
 ];
 
+const ZERO_TACT_INPUTS = {
+  workDaysPerYear: 0,
+  dailyAvailableMinutes: 0,
+  plannedStopMinutes: 0,
+  realAvailableMinutes: 0,
+  annualVehicleTarget: 0,
+  quantityPerVehicle: 0,
+  lineCount: 0,
+};
+
+const EQUIPMENT_PROCESS_NAMES = [
+  "에이밍 조정",
+  "에어블로잉",
+  "핫멜트 도포",
+  "렌즈 가압",
+  "쿨링",
+  "기밀 검사",
+  "부품누락 검사",
+  "반사경 체결기",
+  "하우징 체결기",
+  "렌즈+베젤 체결기",
+];
+
 function toNumber(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeMovementTime(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.round(parsed * 10) / 10);
 }
 
 function formatCardNumber(value, digits = 2, suffix = "") {
@@ -48,50 +79,37 @@ function getExpectedCtDivisor(annualVehicleTarget) {
   return 0;
 }
 
-function loadSavedTactState() {
+function loadSavedTactState(currentBomId) {
+  const defaultState = {
+    tactInputs: { ...ZERO_TACT_INPUTS },
+    isRealAvailableManual: false,
+  };
+
   try {
     const raw = localStorage.getItem(TACT_STORAGE_KEY);
     if (!raw) {
-      return {
-        tactInputs: {
-          workDaysPerYear: "",
-          dailyAvailableMinutes: "",
-          plannedStopMinutes: "",
-          realAvailableMinutes: "",
-          annualVehicleTarget: "",
-          quantityPerVehicle: "",
-          lineCount: "",
-        },
-        isRealAvailableManual: false,
-      };
+      return defaultState;
     }
 
     const parsed = JSON.parse(raw);
+    if (currentBomId && parsed?.bomId !== currentBomId) {
+      return defaultState;
+    }
+
     return {
       tactInputs: {
-        workDaysPerYear: parsed?.tactInputs?.workDaysPerYear ?? "",
-        dailyAvailableMinutes: parsed?.tactInputs?.dailyAvailableMinutes ?? "",
-        plannedStopMinutes: parsed?.tactInputs?.plannedStopMinutes ?? "",
-        realAvailableMinutes: parsed?.tactInputs?.realAvailableMinutes ?? "",
-        annualVehicleTarget: parsed?.tactInputs?.annualVehicleTarget ?? "",
-        quantityPerVehicle: parsed?.tactInputs?.quantityPerVehicle ?? "",
-        lineCount: parsed?.tactInputs?.lineCount ?? "",
+        workDaysPerYear: parsed?.tactInputs?.workDaysPerYear ?? 0,
+        dailyAvailableMinutes: parsed?.tactInputs?.dailyAvailableMinutes ?? 0,
+        plannedStopMinutes: parsed?.tactInputs?.plannedStopMinutes ?? 0,
+        realAvailableMinutes: parsed?.tactInputs?.realAvailableMinutes ?? 0,
+        annualVehicleTarget: parsed?.tactInputs?.annualVehicleTarget ?? 0,
+        quantityPerVehicle: parsed?.tactInputs?.quantityPerVehicle ?? 0,
+        lineCount: parsed?.tactInputs?.lineCount ?? 0,
       },
       isRealAvailableManual: Boolean(parsed?.isRealAvailableManual),
     };
   } catch {
-    return {
-      tactInputs: {
-        workDaysPerYear: "",
-        dailyAvailableMinutes: "",
-        plannedStopMinutes: "",
-        realAvailableMinutes: "",
-        annualVehicleTarget: "",
-        quantityPerVehicle: "",
-        lineCount: "",
-      },
-      isRealAvailableManual: false,
-    };
+    return defaultState;
   }
 }
 
@@ -99,19 +117,21 @@ export default function LobPage() {
   const [params] = useSearchParams();
   const { state, actions } = useApp();
   const assemblyData = useAssemblyData();
-  const initialTactState = useMemo(() => loadSavedTactState(), []);
-
   const paramBomId = params.get("bomId");
   const paramSpec = params.get("spec");
   const bomId = paramBomId || state.bomId;
   const spec = paramSpec || state.selectedSpec;
+  const initialTactState = useMemo(() => loadSavedTactState(bomId), [bomId]);
 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [activeView, setActiveView] = useState("tact");
   const [movementTimes, setMovementTimes] = useState({});
+  const [movementTimeInputs, setMovementTimeInputs] = useState({});
   const [tactInputs, setTactInputs] = useState(initialTactState.tactInputs);
   const [isRealAvailableManual, setIsRealAvailableManual] = useState(initialTactState.isRealAvailableManual);
+  const [equipmentMeta, setEquipmentMeta] = useState({});
+  const prevBomIdRef = useRef(bomId);
 
   useEffect(() => {
     if (paramBomId && paramBomId !== state.bomId) {
@@ -124,6 +144,23 @@ export default function LobPage() {
       actions.setSpec(paramSpec);
     }
   }, [actions, paramSpec, state.selectedSpec]);
+
+  useEffect(() => {
+    if (!bomId) {
+      prevBomIdRef.current = bomId;
+      return;
+    }
+
+    if (prevBomIdRef.current && prevBomIdRef.current !== bomId) {
+      setTactInputs(ZERO_TACT_INPUTS);
+      setIsRealAvailableManual(false);
+      setMovementTimes({});
+      setMovementTimeInputs({});
+      setEquipmentMeta({});
+    }
+
+    prevBomIdRef.current = bomId;
+  }, [bomId]);
 
   useEffect(() => {
     const load = async () => {
@@ -186,6 +223,50 @@ export default function LobPage() {
       expectedCt,
     };
   }, [movementTimes, tactMetrics.annualVehicles, workerStats]);
+  const equipmentTargetCt = useMemo(
+    () => workerTopMetrics.expectedCt * 0.9,
+    [workerTopMetrics.expectedCt]
+  );
+  const equipmentRows = useMemo(() => {
+    return EQUIPMENT_PROCESS_NAMES.map((name) => {
+      const matchedRows = rows.filter((row) => {
+        const values = [
+          row["부품 기준"],
+          row["요소작업"],
+          row["OPTION"],
+          row["동작요소"],
+          row.__groupLabel,
+          row.__sequenceGroupLabel,
+        ];
+
+        return values.some((value) => String(value ?? "").includes(name));
+      });
+
+      const equipmentTime = matchedRows.reduce(
+        (sum, row) => sum + toNumber(row["TOTAL"]),
+        0
+      );
+      const equipmentTimeInput = equipmentMeta[name]?.equipmentTime;
+      const manualTimeInput = equipmentMeta[name]?.manualTime;
+      const manualTime = toNumber(manualTimeInput);
+      const normalizedEquipmentTime =
+        equipmentTimeInput === undefined || equipmentTimeInput === ""
+          ? equipmentTime
+          : toNumber(equipmentTimeInput);
+
+      return {
+        name,
+        investmentCost: equipmentMeta[name]?.investmentCost ?? "",
+        equipmentTime: normalizedEquipmentTime,
+        equipmentTimeInput: equipmentTimeInput ?? "",
+        manualTime,
+        manualTimeInput: manualTimeInput ?? "",
+        totalTime: normalizedEquipmentTime + manualTime,
+        reviewChecked: Boolean(equipmentMeta[name]?.reviewChecked),
+        improvementNote: equipmentMeta[name]?.improvementNote ?? "",
+      };
+    });
+  }, [equipmentMeta, rows]);
 
   useEffect(() => {
     setMovementTimes((prev) => {
@@ -198,20 +279,46 @@ export default function LobPage() {
   }, [workerStats]);
 
   useEffect(() => {
+    setMovementTimeInputs((prev) => {
+      const next = {};
+      workerStats.forEach((worker) => {
+        if (prev[worker.worker] !== undefined) {
+          next[worker.worker] = prev[worker.worker];
+        } else {
+          next[worker.worker] = String(movementTimes[worker.worker] ?? 0);
+        }
+      });
+      return next;
+    });
+  }, [movementTimes, workerStats]);
+
+  useEffect(() => {
     localStorage.setItem(
       TACT_STORAGE_KEY,
       JSON.stringify({
+        bomId,
         tactInputs,
         isRealAvailableManual,
       })
     );
-  }, [isRealAvailableManual, tactInputs]);
+  }, [bomId, isRealAvailableManual, tactInputs]);
 
   const handleMovementTimeChange = (worker, value) => {
-    const parsed = Number(value);
+    setMovementTimeInputs((prev) => ({
+      ...prev,
+      [worker]: value,
+    }));
+  };
+
+  const commitMovementTimeChange = (worker, value) => {
+    const normalized = normalizeMovementTime(value);
     setMovementTimes((prev) => ({
       ...prev,
-      [worker]: Number.isFinite(parsed) && parsed >= 0 ? parsed : 0,
+      [worker]: normalized,
+    }));
+    setMovementTimeInputs((prev) => ({
+      ...prev,
+      [worker]: String(normalized),
     }));
   };
 
@@ -252,12 +359,14 @@ export default function LobPage() {
     }
   };
 
-  const handleDownloadExcel = () => {
-    downloadWorkerLobExcel({
-      spec,
-      workerStats,
-      movementTimes,
-    });
+  const updateEquipmentMeta = (name, patch) => {
+    setEquipmentMeta((prev) => ({
+      ...prev,
+      [name]: {
+        ...(prev[name] || {}),
+        ...patch,
+      },
+    }));
   };
 
   if (!bomId || !spec) {
@@ -274,7 +383,7 @@ export default function LobPage() {
         minHeight: "100%",
         padding: 24,
         background:
-          "radial-gradient(circle at top left, rgba(163, 230, 53, 0.18), transparent 22%), linear-gradient(180deg, #f4f8fb 0%, #edf3f8 100%)",
+          "radial-gradient(circle at top left, rgba(186, 230, 253, 0.28), transparent 24%), linear-gradient(180deg, #f4f8fb 0%, #eaf4fb 100%)",
       }}
     >
       <div
@@ -340,9 +449,164 @@ export default function LobPage() {
             분석할 작업자 LOB 데이터가 없습니다. 조립 총공수 페이지에서 저장된 데이터의 `작업자`, `no`, `TOTAL` 값을 먼저 확인하세요.
           </section>
         ) : activeView === "equipment" ? (
-          <section style={emptyStateStyle}>
-            설비 LOB 분석 화면은 다음 단계에서 구현하면 됩니다. 현재 데이터 구조에서는 설비 식별 컬럼 정의가 먼저 필요합니다.
-          </section>
+          <>
+            <section style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+              <SummaryCard
+                title="Tact Time"
+                value={formatCardNumber(tactMetrics.lineTactSeconds, 2, " sec")}
+                accent="#0f766e"
+              />
+              <SummaryCard
+                title="예상 C/T"
+                value={formatCardNumber(workerTopMetrics.expectedCt, 2, " sec")}
+                accent="#b91c1c"
+              />
+              <SummaryCard
+                title="설비 목표 C/T"
+                value={formatCardNumber(equipmentTargetCt, 2, " sec")}
+                accent="#1d4ed8"
+              />
+            </section>
+
+            <section style={equipmentCardStyle}>
+              <div>
+                <div style={{ fontSize: 24, fontWeight: 700, color: "#102a43" }}>설비 공정 표</div>
+                <div style={{ color: "#526071", marginTop: 6 }}>
+                  지정된 설비 공정명이 행에 포함되면 해당 시간 합계를 표와 그래프에 반영합니다.
+                </div>
+              </div>
+
+              <div style={{ overflowX: "auto" }}>
+                <table
+                  style={{
+                    width: "100%",
+                    minWidth: 980,
+                    borderCollapse: "collapse",
+                    background: "#ffffff",
+                  }}
+                >
+                  <thead>
+                    <tr style={{ background: "#f8fafc", borderBottom: "1px solid #d9e2ec" }}>
+                      {[
+                        "공정명",
+                        "투자 금액(천원/대)",
+                        "장비 시간(sec)",
+                        "수작업 시간(sec)",
+                        "합 계",
+                        "검토사항 체크",
+                        "개선 사항",
+                      ].map((label) => (
+                        <th
+                          key={label}
+                          style={{
+                            padding: "12px 14px",
+                            fontSize: 13,
+                            color: "#334e68",
+                            textAlign: "left",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {label}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {equipmentRows.map((row) => (
+                      <tr
+                        key={row.name}
+                        style={{
+                          borderBottom: "1px solid #e5e7eb",
+                          background: row.reviewChecked ? "#fef2f2" : "#ffffff",
+                        }}
+                      >
+                        <td style={equipmentCellStyle}>{row.name}</td>
+                        <td style={equipmentCellStyle}>
+                          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                            <input
+                              type="text"
+                              value={row.investmentCost}
+                              onChange={(e) =>
+                                updateEquipmentMeta(row.name, {
+                                  investmentCost: e.target.value,
+                                })
+                              }
+                              style={equipmentInputStyle}
+                            />
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateEquipmentMeta(row.name, {
+                                  investmentCost: "기존 활용",
+                                })
+                              }
+                              style={equipmentQuickButtonStyle}
+                            >
+                              기존 활용
+                            </button>
+                          </div>
+                        </td>
+                        <td style={equipmentCellStyle}>
+                          <input
+                            type="number"
+                            min={0}
+                            step={0.01}
+                            value={row.equipmentTimeInput}
+                            onChange={(e) =>
+                              updateEquipmentMeta(row.name, {
+                                equipmentTime: e.target.value,
+                              })
+                            }
+                            style={equipmentInputStyle}
+                          />
+                        </td>
+                        <td style={equipmentCellStyle}>
+                          <input
+                            type="number"
+                            min={0}
+                            step={0.01}
+                            value={row.manualTimeInput}
+                            onChange={(e) =>
+                              updateEquipmentMeta(row.name, {
+                                manualTime: e.target.value,
+                              })
+                            }
+                            style={equipmentInputStyle}
+                          />
+                        </td>
+                        <td style={equipmentCellStyle}>{formatCardNumber(row.totalTime, 2)}</td>
+                        <td style={equipmentCellStyle}>
+                          <input
+                            type="checkbox"
+                            checked={row.reviewChecked}
+                            onChange={(e) =>
+                              updateEquipmentMeta(row.name, {
+                                reviewChecked: e.target.checked,
+                              })
+                            }
+                          />
+                        </td>
+                        <td style={equipmentCellStyle}>
+                          <input
+                            type="text"
+                            value={row.improvementNote}
+                            onChange={(e) =>
+                              updateEquipmentMeta(row.name, {
+                                improvementNote: e.target.value,
+                              })
+                            }
+                            style={equipmentInputStyle}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <EquipmentStackedBarChart equipmentRows={equipmentRows} />
+          </>
         ) : (
           <>
             <section style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
@@ -376,25 +640,6 @@ export default function LobPage() {
               ))}
             </section>
 
-            <section style={{ display: "flex", justifyContent: "flex-end" }}>
-              <button
-                type="button"
-                onClick={handleDownloadExcel}
-                style={{
-                  padding: "12px 18px",
-                  borderRadius: 14,
-                  border: "1px solid #0f766e",
-                  background: "#ffffff",
-                  color: "#0f766e",
-                  fontSize: 15,
-                  fontWeight: 700,
-                  boxShadow: "0 12px 28px rgba(15, 23, 42, 0.06)",
-                }}
-              >
-                엑셀 다운로드
-              </button>
-            </section>
-
             <VerticalBarChart workerStats={workerStats} movementTimes={movementTimes} maxTime={maxTime} />
 
             <section style={{ display: "grid", gap: 12 }}>
@@ -407,7 +652,9 @@ export default function LobPage() {
               <WorkerTable
                 workerStats={workerStats}
                 movementTimes={movementTimes}
+                movementTimeInputs={movementTimeInputs}
                 onChangeMovementTime={handleMovementTimeChange}
+                onCommitMovementTime={commitMovementTimeChange}
               />
             </section>
 
@@ -445,4 +692,43 @@ const emptyStateStyle = {
   border: "1px solid #d9e2ec",
   boxShadow: "0 18px 40px rgba(15, 23, 42, 0.08)",
   color: "#334e68",
+};
+
+const equipmentCardStyle = {
+  display: "grid",
+  gap: 16,
+  padding: 24,
+  borderRadius: 24,
+  background: "#ffffff",
+  border: "1px solid #d9e2ec",
+  boxShadow: "0 18px 40px rgba(15, 23, 42, 0.08)",
+};
+
+const equipmentCellStyle = {
+  padding: "12px 14px",
+  fontSize: 13,
+  color: "#102a43",
+  verticalAlign: "middle",
+};
+
+const equipmentInputStyle = {
+  width: "100%",
+  minWidth: 120,
+  padding: "8px 10px",
+  borderRadius: 10,
+  border: "1px solid #cbd5e1",
+  fontSize: 13,
+  boxSizing: "border-box",
+};
+
+const equipmentQuickButtonStyle = {
+  flexShrink: 0,
+  padding: "8px 10px",
+  borderRadius: 10,
+  border: "1px solid #bfdbfe",
+  background: "#eff6ff",
+  color: "#1d4ed8",
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: "pointer",
 };

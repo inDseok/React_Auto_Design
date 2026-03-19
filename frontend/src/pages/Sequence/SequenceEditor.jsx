@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useLocation } from "react-router-dom";
 
 import SequencePalette from "./SequencePalette";
@@ -6,6 +6,14 @@ import SequenceCanvas from "./SequenceCanvas";
 import SequenceInspector from "./SequenceInspector";
 
 const API_BASE = "http://localhost:8000";
+
+function isTextEditingTarget(target) {
+  if (!target) return false;
+  if (target.isContentEditable) return true;
+
+  const tag = target.tagName?.toLowerCase();
+  return tag === "input" || tag === "textarea" || tag === "select";
+}
 
 export default function SequenceEditor() {
   const location = useLocation();
@@ -22,11 +30,128 @@ export default function SequenceEditor() {
   // ===============================
   // React Flow state
   // ===============================
-  const [nodes, setNodes] = useState([]);
-  const [edges, setEdges] = useState([]);
-  const [groups, setGroups] = useState([]);
+  const [flowState, setFlowState] = useState({
+    nodes: [],
+    edges: [],
+    groups: [],
+    workerGroups: [],
+  });
   const [selectedNodeId, setSelectedNodeId] = useState(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState(null);
+
+  const historyRef = useRef([]);
+  const redoHistoryRef = useRef([]);
+  const flowStateRef = useRef(flowState);
+  const HISTORY_LIMIT = 80;
+
+  const nodes = flowState.nodes;
+  const edges = flowState.edges;
+  const groups = flowState.groups;
+  const workerGroups = flowState.workerGroups;
+
+  const cloneFlowState = useCallback((value) => JSON.parse(JSON.stringify(value)), []);
+
+  useEffect(() => {
+    flowStateRef.current = flowState;
+  }, [flowState]);
+
+  const applyFlowChange = useCallback(
+    (updater, options = {}) => {
+      const { recordHistory = true } = options;
+      setFlowState((prev) => {
+        const next =
+          typeof updater === "function"
+            ? updater(prev)
+            : {
+                ...prev,
+                ...updater,
+              };
+
+        if (recordHistory) {
+          historyRef.current.push(cloneFlowState(prev));
+          if (historyRef.current.length > HISTORY_LIMIT) {
+            historyRef.current.shift();
+          }
+          redoHistoryRef.current = [];
+        }
+
+        return next;
+      });
+    },
+    [cloneFlowState]
+  );
+
+  const replaceFlowState = useCallback(
+    (nextState, options = {}) => {
+      applyFlowChange(
+        () => ({
+          nodes: Array.isArray(nextState.nodes) ? nextState.nodes : [],
+          edges: Array.isArray(nextState.edges) ? nextState.edges : [],
+          groups: Array.isArray(nextState.groups) ? nextState.groups : [],
+          workerGroups: Array.isArray(nextState.workerGroups)
+            ? nextState.workerGroups
+            : [],
+        }),
+        options
+      );
+    },
+    [applyFlowChange]
+  );
+
+  const setNodes = useCallback(
+    (updater) => {
+      applyFlowChange((prev) => ({
+        ...prev,
+        nodes: typeof updater === "function" ? updater(prev.nodes) : updater,
+      }));
+    },
+    [applyFlowChange]
+  );
+
+  const setEdges = useCallback(
+    (updater) => {
+      applyFlowChange((prev) => ({
+        ...prev,
+        edges: typeof updater === "function" ? updater(prev.edges) : updater,
+      }));
+    },
+    [applyFlowChange]
+  );
+
+  const setGroups = useCallback(
+    (updater) => {
+      applyFlowChange((prev) => ({
+        ...prev,
+        groups: typeof updater === "function" ? updater(prev.groups) : updater,
+      }));
+    },
+    [applyFlowChange]
+  );
+
+  const setWorkerGroups = useCallback(
+    (updater) => {
+      applyFlowChange((prev) => ({
+        ...prev,
+        workerGroups:
+          typeof updater === "function" ? updater(prev.workerGroups) : updater,
+      }));
+    },
+    [applyFlowChange]
+  );
+
+  const undoFlowChange = useCallback(() => {
+    const previous = historyRef.current.pop();
+    if (!previous) return;
+    redoHistoryRef.current.push(cloneFlowState(flowStateRef.current));
+    setFlowState(previous);
+  }, [cloneFlowState]);
+
+  const redoFlowChange = useCallback(() => {
+    const next = redoHistoryRef.current.pop();
+    if (!next) return;
+    historyRef.current.push(cloneFlowState(flowStateRef.current));
+    setFlowState(next);
+  }, [cloneFlowState]);
 
   // ===============================
   // UI state
@@ -48,34 +173,49 @@ export default function SequenceEditor() {
     setSelectedEdgeId(null);
   }, []);
 
+  useEffect(() => {
+    if (selectedNodeId && !nodes.some((node) => node.id === selectedNodeId)) {
+      setSelectedNodeId(null);
+    }
+  }, [nodes, selectedNodeId]);
+
+  useEffect(() => {
+    if (selectedEdgeId && !edges.some((edge) => edge.id === selectedEdgeId)) {
+      setSelectedEdgeId(null);
+    }
+  }, [edges, selectedEdgeId]);
+
   const addManualPartNode = useCallback(() => {
     if (!manualSheet || !manualPartBase) {
       alert("시트, 부품 기준을 모두 선택하세요.");
       return;
     }
 
-    setNodes((prev) => [
+    applyFlowChange((prev) => ({
       ...prev,
-      {
-        id: `N-${Date.now()}`,
-        type: "PART",
-        position: {
-          x: 120 + (prev.length % 4) * 220,
-          y: 120 + Math.floor(prev.length / 4) * 120,
+      nodes: [
+        ...prev.nodes,
+        {
+          id: `N-${Date.now()}`,
+          type: "PART",
+          position: {
+            x: 120 + (prev.nodes.length % 4) * 220,
+            y: 120 + Math.floor(prev.nodes.length / 4) * 120,
+          },
+          data: {
+            partId: manualPartBase,
+            partName: manualPartBase,
+            inhouse: true,
+            partBase: manualPartBase,
+            sourceSheet: manualSheet,
+            option: "",
+            statusLabel: "",
+            label: manualPartBase,
+          },
         },
-        data: {
-          partId: manualPartBase,
-          partName: manualPartBase,
-          inhouse: true,
-          partBase: manualPartBase,
-          sourceSheet: manualSheet,
-          option: "",
-          statusLabel: "",
-          label: manualPartBase,
-        },
-      },
-    ]);
-  }, [manualSheet, manualPartBase, setNodes]);
+      ],
+    }));
+  }, [applyFlowChange, manualSheet, manualPartBase]);
 
   // ===============================
   // PROCESS templates 로드
@@ -227,26 +367,85 @@ export default function SequenceEditor() {
   // ===============================
   const onKeyDown = useCallback(
     (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        if (e.shiftKey) {
+          redoFlowChange();
+          return;
+        }
+        undoFlowChange();
+        return;
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") {
+        e.preventDefault();
+        redoFlowChange();
+        return;
+      }
+
       if (e.key !== "Delete" && e.key !== "Backspace") return;
 
       if (selectedEdgeId) {
-        setEdges((eds) => eds.filter((edge) => edge.id !== selectedEdgeId));
+        applyFlowChange((prev) => ({
+          ...prev,
+          edges: prev.edges.filter((edge) => edge.id !== selectedEdgeId),
+        }));
         setSelectedEdgeId(null);
         return;
       }
 
       if (selectedNodeId) {
-        setNodes((nds) => nds.filter((node) => node.id !== selectedNodeId));
-        setEdges((eds) =>
-          eds.filter(
-            (edge) => edge.source !== selectedNodeId && edge.target !== selectedNodeId
-          )
-        );
+        applyFlowChange((prev) => ({
+          ...prev,
+          nodes: prev.nodes.filter((node) => node.id !== selectedNodeId),
+          edges: prev.edges.filter(
+            (edge) =>
+              edge.source !== selectedNodeId && edge.target !== selectedNodeId
+          ),
+          groups: prev.groups
+            .map((group) => ({
+              ...group,
+              nodeIds: (group.nodeIds || []).filter((id) => id !== selectedNodeId),
+            }))
+            .filter((group) => (group.nodeIds || []).length >= 2),
+          workerGroups: prev.workerGroups
+            .map((group) => ({
+              ...group,
+              nodeIds: (group.nodeIds || []).filter((id) => id !== selectedNodeId),
+            }))
+            .filter((group) => (group.nodeIds || []).length >= 1),
+        }));
         setSelectedNodeId(null);
       }
     },
-    [selectedNodeId, selectedEdgeId, setNodes, setEdges]
+    [applyFlowChange, selectedNodeId, selectedEdgeId, undoFlowChange]
   );
+
+  const flowControls = useMemo(
+    () => ({
+      applyFlowChange,
+      replaceFlowState,
+      getFlowState: () => flowStateRef.current,
+      undoFlowChange,
+      redoFlowChange,
+    }),
+    [applyFlowChange, replaceFlowState, undoFlowChange, redoFlowChange]
+  );
+
+  useEffect(() => {
+    const handleWindowKeyDown = (e) => {
+      if (e.defaultPrevented) {
+        return;
+      }
+      if (isTextEditingTarget(e.target)) {
+        return;
+      }
+      onKeyDown(e);
+    };
+
+    window.addEventListener("keydown", handleWindowKeyDown);
+    return () => window.removeEventListener("keydown", handleWindowKeyDown);
+  }, [onKeyDown]);
 
   // ===============================
   // bomId/spec 없을 때 가드 UI
@@ -402,9 +601,12 @@ export default function SequenceEditor() {
             nodes={nodes}
             edges={edges}
             groups={groups}
+            workerGroups={workerGroups}
             setNodes={setNodes}
             setEdges={setEdges}
             setGroups={setGroups}
+            setWorkerGroups={setWorkerGroups}
+            flowControls={flowControls}
             onSelectNode={setSelectedNodeId}
             onSelectEdge={setSelectedEdgeId}
             onKeyDown={onKeyDown}
@@ -418,7 +620,10 @@ export default function SequenceEditor() {
           nodes={nodes}
           edges={edges}
           groups={groups}
+          workerGroups={workerGroups}
           setGroups={setGroups}
+          setWorkerGroups={setWorkerGroups}
+          flowControls={flowControls}
           selectedNodeId={selectedNodeId}
           selectedEdgeId={selectedEdgeId}
           setNodes={setNodes}
