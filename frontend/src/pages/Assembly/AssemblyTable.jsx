@@ -347,7 +347,7 @@ export default function AssemblyTable({
     />
   );
 
-  const renderNumberInput = (row, col, { step = "0.01", min } = {}) => (
+  const renderNumberInput = (row, col, { step = "0.1", min } = {}) => (
     <input
       type="number"
       value={row[col] ?? ""}

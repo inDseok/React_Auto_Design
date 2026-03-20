@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { useApp } from "../../state/AppContext";
 import { useAssemblyData } from "../Assembly/useAssemblyData";
 import { EquipmentStackedBarChart, VerticalBarChart } from "./LobCharts";
+import { ProcessDesignTable } from "./ProcessDesignTable";
 import { SummaryCard } from "./LobSummaryCards";
 import { TactTimeSection } from "./TactTimeSection";
 import { WorkerDetailSection } from "./WorkerDetailSection";
@@ -22,6 +23,7 @@ const VIEW_OPTIONS = [
   { key: "tact", label: "Tact time 분석" },
   { key: "worker", label: "작업자 LOB" },
   { key: "equipment", label: "설비 LOB" },
+  { key: "process-design", label: "공정설계표" },
 ];
 
 const ZERO_TACT_INPUTS = {
@@ -206,6 +208,10 @@ export default function LobPage() {
 
     return {
       annualVehicles,
+      realAvailable,
+      workDays,
+      annualRequiredQuantity,
+      dailyRequiredQuantity,
       lineTactMinutes,
       lineTactSeconds,
     };
@@ -267,6 +273,44 @@ export default function LobPage() {
       };
     });
   }, [equipmentMeta, rows]);
+  const processDesignMetrics = useMemo(() => {
+    const workerCount = summary.workers;
+    const totalManualTime = summary.totalTime;
+    const tactTimeSeconds = tactMetrics.lineTactSeconds;
+    const neckTime = workerTopMetrics.neckTime;
+    const expectedCycleTime = workerTopMetrics.expectedCt;
+    const efficiencyRatio =
+      neckTime > 0 && expectedCycleTime > 0 ? neckTime / expectedCycleTime : 0;
+    const efficiencyPercent = efficiencyRatio * 100;
+    const standardUph = neckTime > 0 ? 3600 / neckTime : 0;
+    const expectedUph = expectedCycleTime > 0 ? 3600 / expectedCycleTime : 0;
+    const expectedUpmh = workerCount > 0 ? expectedUph / workerCount : 0;
+    const minimumWorkers = tactTimeSeconds > 0 ? totalManualTime / tactTimeSeconds : 0;
+    const lobPercent =
+      neckTime > 0 && workerCount > 0 ? (totalManualTime / (neckTime * workerCount)) * 100 : 0;
+    const loadHours = expectedUph > 0 ? tactMetrics.dailyRequiredQuantity / expectedUph : 0;
+    const dailyOperatingHours = tactMetrics.realAvailable / 60;
+    const loadRatePercent =
+      dailyOperatingHours > 0 ? (loadHours / dailyOperatingHours) * 100 : 0;
+    const dailyLineCapacity = expectedUph * dailyOperatingHours;
+
+    return {
+      tactTimeSeconds,
+      totalManualTime,
+      minimumWorkers,
+      workerCount,
+      neckTime,
+      expectedCycleTime,
+      efficiencyPercent,
+      standardUph,
+      expectedUph,
+      expectedUpmh,
+      lobPercent,
+      loadHours,
+      loadRatePercent,
+      dailyLineCapacity,
+    };
+  }, [summary, tactMetrics, workerTopMetrics]);
 
   useEffect(() => {
     setMovementTimes((prev) => {
@@ -607,6 +651,8 @@ export default function LobPage() {
 
             <EquipmentStackedBarChart equipmentRows={equipmentRows} />
           </>
+        ) : activeView === "process-design" ? (
+          <ProcessDesignTable metrics={processDesignMetrics} />
         ) : (
           <>
             <section style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>

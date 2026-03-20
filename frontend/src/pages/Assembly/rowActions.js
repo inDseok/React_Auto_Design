@@ -80,6 +80,13 @@ function formatDecimalCell(value) {
   return num.toFixed(2);
 }
 
+function formatRepeatCountCell(value) {
+  if (value === "" || value === null || value === undefined) return "";
+  const num = Number(value);
+  if (!Number.isFinite(num)) return value;
+  return num.toFixed(1);
+}
+
 export function deleteRow(rows, targetRowId) {
   const idx = rows.findIndex((r) => r.id === targetRowId);
   if (idx === -1) return rows;
@@ -156,6 +163,9 @@ export function updateCell(rows, rowId, field, value) {
 
     if (field === "SEC" || field === "TOTAL") {
       updated[field] = formatDecimalCell(value);
+    }
+    if (field === "반복횟수") {
+      updated[field] = formatRepeatCountCell(value);
     }
 
     // SEC / 반복횟수 변경 시에만 TOTAL 자동 갱신

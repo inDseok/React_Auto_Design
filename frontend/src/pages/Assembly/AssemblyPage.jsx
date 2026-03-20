@@ -49,7 +49,7 @@ function getRowTotalTime(row) {
 
   const sec = toNumber(row["SEC"]);
   const repeat = toNumber(row["반복횟수"]);
-  if (sec > 0 && repeat > 0) {
+  if (sec > 0) {
     return sec * repeat;
   }
 
@@ -71,7 +71,6 @@ function buildWorkerRecommendation(rows, workerCount) {
   let currentBundle = null;
 
   processedRows.forEach((processedRow, index) => {
-    const rawRow = rows[index];
     const groupKey = processedRow.__groupKey || "__ungrouped__";
     const partLabel = String(processedRow["부품 기준"] ?? "").trim() || "미지정 부품";
     const groupLabel =
@@ -81,7 +80,7 @@ function buildWorkerRecommendation(rows, workerCount) {
           processedRow["부품 기준"] ??
           ""
       ).trim() || "이름 없음";
-    const totalTime = getRowTotalTime(rawRow);
+    const totalTime = getRowTotalTime(processedRow);
     const bundleKey = `${groupKey}::${partLabel}::${index}`;
 
     if (
@@ -101,7 +100,7 @@ function buildWorkerRecommendation(rows, workerCount) {
       bundles.push(currentBundle);
     }
 
-    currentBundle.rowIds.push(rawRow.id);
+    currentBundle.rowIds.push(rows[index].id);
     currentBundle.rowCount += 1;
     currentBundle.totalTime += totalTime;
   });
