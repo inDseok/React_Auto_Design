@@ -10,6 +10,7 @@ export default function ProcessNode({ data, selected }) {
   } = data;
 
   const processName = label || partBase || "공정";
+  const isOptionMissing = !String(data.option || "").trim();
   const handleColor = isAssemblyImported ? "#8b5cf6" : "#fb923c";
 
   return (
@@ -20,12 +21,20 @@ export default function ProcessNode({ data, selected }) {
         borderRadius: 8,
         border: selected
           ? `2px solid ${isAssemblyImported ? "#7c3aed" : "#f97316"}`
-          : `1px solid ${isAssemblyImported ? "#ddd6fe" : "#fed7aa"}`,
-        background: isAssemblyImported ? "#f5f3ff" : "#fff7ed",
+          : isOptionMissing
+            ? "2px solid #dc2626"
+            : `1px solid ${isAssemblyImported ? "#ddd6fe" : "#fed7aa"}`,
+        background: isOptionMissing
+          ? "#fff7f7"
+          : isAssemblyImported
+            ? "#f5f3ff"
+            : "#fff7ed",
         boxShadow: selected
           ? isAssemblyImported
             ? "0 0 0 2px rgba(124,58,237,0.2)"
             : "0 0 0 2px rgba(249,115,22,0.2)"
+          : isOptionMissing
+            ? "0 0 0 2px rgba(220,38,38,0.12)"
           : "0 1px 3px rgba(0,0,0,0.1)",
         fontSize: 12,
         position: "relative",
@@ -43,19 +52,36 @@ export default function ProcessNode({ data, selected }) {
         }}
       >
         <div style={{ fontWeight: 600 }}>PROCESS</div>
-        {sourceSheet && (
-          <div
-            style={{
-              fontSize: 10,
-              padding: "2px 6px",
-              borderRadius: 6,
-              background: isAssemblyImported ? "#8b5cf6" : "#fb923c",
-              color: "#fff",
-            }}
-          >
-            {isAssemblyImported ? "ASM" : sourceSheet}
-          </div>
-        )}
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          {isOptionMissing && (
+            <div
+              style={{
+                fontSize: 10,
+                padding: "2px 6px",
+                borderRadius: 6,
+                background: "#fee2e2",
+                color: "#b91c1c",
+                border: "1px solid #fecaca",
+                fontWeight: 700,
+              }}
+            >
+              OPTION
+            </div>
+          )}
+          {sourceSheet && (
+            <div
+              style={{
+                fontSize: 10,
+                padding: "2px 6px",
+                borderRadius: 6,
+                background: isAssemblyImported ? "#8b5cf6" : "#fb923c",
+                color: "#fff",
+              }}
+            >
+              {isAssemblyImported ? "ASM" : sourceSheet}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Body */}
@@ -71,6 +97,19 @@ export default function ProcessNode({ data, selected }) {
         >
           {processName}
         </div>
+
+        {isOptionMissing && (
+          <div
+            style={{
+              marginTop: 2,
+              fontSize: 11,
+              color: "#b91c1c",
+              fontWeight: 600,
+            }}
+          >
+            OPTION 미선택
+          </div>
+        )}
       </div>
 
       {/* Handles */}

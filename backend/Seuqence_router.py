@@ -4,7 +4,7 @@ from pathlib import Path
 import json
 import os
 from openpyxl import load_workbook
-from typing import List, Dict
+from typing import List, Dict, Optional
 from functools import lru_cache
 from backend.Assembly.auto_match import (
     load_db_rows,
@@ -313,76 +313,70 @@ def get_process_templates():
 @router.get("/process/options")
 def get_options(
     part_base: str = Query(..., alias="partBase"),
-    source_sheet: str = Query(..., alias="sourceSheet"),
+    source_sheet: Optional[str] = Query(None, alias="sourceSheet"),
 ):
     if not EXCEL_DB_PATH.exists():
         raise HTTPException(404, "작업시간 분석표 DB 엑셀 파일 없음")
 
     wb = load_workbook(EXCEL_DB_PATH, data_only=True)
 
-    if source_sheet not in wb.sheetnames:
-        return {
-            "partBase": part_base,
-            "sourceSheet": source_sheet,
-            "options": [],
-        }
+    requested_sheet = (source_sheet or "").strip()
+    sheet_names = [requested_sheet] if requested_sheet in wb.sheetnames else list(wb.sheetnames)
 
-    ws = wb[source_sheet]
+    options: List[str] = []
+    matched_sheets: List[str] = []
 
-    header_row = 2
-    headers = {}
+    for sheet_name in sheet_names:
+        ws = wb[sheet_name]
 
-    for col in range(1, ws.max_column + 1):
-        v = ws.cell(row=header_row, column=col).value
-        if v:
-            headers[str(v).strip()] = col
+        header_row = 2
+        headers = {}
 
-    # OPTION 컬럼 찾기
-    option_col = None
-    for k, c in headers.items():
-        if "OPTION" in k.upper():
-            option_col = c
-            break
+        for col in range(1, ws.max_column + 1):
+            v = ws.cell(row=header_row, column=col).value
+            if v:
+                headers[str(v).strip()] = col
 
-    if not option_col:
-        return {
-            "partBase": part_base,
-            "sourceSheet": source_sheet,
-            "options": [],
-        }
+        option_col = None
+        for k, c in headers.items():
+            if "OPTION" in k.upper():
+                option_col = c
+                break
 
-    # 부품 기준 컬럼 찾기
-    part_col = None
-    for k, c in headers.items():
-        if "부품" in k.replace(" ", ""):
-            part_col = c
-            break
+        part_col = None
+        for k, c in headers.items():
+            if "부품" in k.replace(" ", ""):
+                part_col = c
+                break
 
-    if not part_col:
-        return {
-            "partBase": part_base,
-            "sourceSheet": source_sheet,
-            "options": [],
-        }
+        if not option_col or not part_col:
+          continue
 
-    options = collect_options_for_part(
-        ws=ws,
-        part_col=part_col,
-        option_col=option_col,
-        header_row=header_row,
-        part_base=part_base,
-    )
+        sheet_options = collect_options_for_part(
+            ws=ws,
+            part_col=part_col,
+            option_col=option_col,
+            header_row=header_row,
+            part_base=part_base,
+        )
+
+        if sheet_options:
+            matched_sheets.append(sheet_name)
+            options.extend(sheet_options)
+
+    options = list(dict.fromkeys(options))
 
     return {
         "partBase": part_base,
-        "sourceSheet": source_sheet,
+        "sourceSheet": requested_sheet,
+        "matchedSheets": matched_sheets,
         "options": options,
     }
 
 @router.get("/part/options")
 def get_part_options(
     part_base: str = Query(..., alias="partBase"),
-    source_sheet: str = Query(..., alias="sourceSheet"),
+    source_sheet: Optional[str] = Query(None, alias="sourceSheet"),
 ):
     """
     부품 기준 OPTION 조회
@@ -394,57 +388,56 @@ def get_part_options(
 
     wb = load_workbook(EXCEL_DB_PATH, data_only=True)
 
-    if source_sheet not in wb.sheetnames:
-        return {
-            "partBase": part_base,
-            "sourceSheet": source_sheet,
-            "options": [],
-            "count": 0,
-        }
+    requested_sheet = (source_sheet or "").strip()
+    sheet_names = [requested_sheet] if requested_sheet in wb.sheetnames else list(wb.sheetnames)
 
-    ws = wb[source_sheet]
+    options: List[str] = []
+    matched_sheets: List[str] = []
 
-    header_row = 2
-    headers = {}
+    for sheet_name in sheet_names:
+        ws = wb[sheet_name]
 
-    for col in range(1, ws.max_column + 1):
-        v = ws.cell(row=header_row, column=col).value
-        if v:
-            headers[str(v).strip()] = col
+        header_row = 2
+        headers = {}
 
-    # OPTION 컬럼
-    option_col = None
-    for k, c in headers.items():
-        if "OPTION" in k.upper():
-            option_col = c
-            break
+        for col in range(1, ws.max_column + 1):
+            v = ws.cell(row=header_row, column=col).value
+            if v:
+                headers[str(v).strip()] = col
 
-    # 부품 기준 컬럼
-    part_col = None
-    for k, c in headers.items():
-        if "부품" in k.replace(" ", ""):
-            part_col = c
-            break
+        option_col = None
+        for k, c in headers.items():
+            if "OPTION" in k.upper():
+                option_col = c
+                break
 
-    if not option_col or not part_col:
-        return {
-            "partBase": part_base,
-            "sourceSheet": source_sheet,
-            "options": [],
-            "count": 0,
-        }
+        part_col = None
+        for k, c in headers.items():
+            if "부품" in k.replace(" ", ""):
+                part_col = c
+                break
 
-    options = collect_options_for_part(
-        ws=ws,
-        part_col=part_col,
-        option_col=option_col,
-        header_row=header_row,
-        part_base=part_base,
-    )
+        if not option_col or not part_col:
+            continue
+
+        sheet_options = collect_options_for_part(
+            ws=ws,
+            part_col=part_col,
+            option_col=option_col,
+            header_row=header_row,
+            part_base=part_base,
+        )
+
+        if sheet_options:
+            matched_sheets.append(sheet_name)
+            options.extend(sheet_options)
+
+    options = list(dict.fromkeys(options))
 
     return {
         "partBase": part_base,
-        "sourceSheet": source_sheet,
+        "sourceSheet": requested_sheet,
+        "matchedSheets": matched_sheets,
         "options": options,
         "count": len(options),
     }

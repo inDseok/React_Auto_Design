@@ -10,6 +10,22 @@ json_경로 = r"C:\Users\USER\Desktop\HL_STD_LHD_LD 3.json"
 결과파일 = r"C:\Users\USER\Desktop\서브단위 부품구성도.xlsx"
 
 
+def 안전한_시트명(workbook, raw_title: str) -> str:
+    base = (raw_title or "Sheet").strip() or "Sheet"
+    invalid_chars = set('[]:*?/\\')
+    sanitized = "".join("_" if ch in invalid_chars else ch for ch in base)[:31] or "Sheet"
+
+    if sanitized not in workbook.sheetnames:
+        return sanitized
+
+    suffix = 2
+    while True:
+        candidate = f"{sanitized[:28]}_{suffix}"[:31]
+        if candidate not in workbook.sheetnames:
+            return candidate
+        suffix += 1
+
+
 # ================================================================
 # 1-2. 결과 파일 생성 (테스트용)
 # ================================================================
@@ -18,8 +34,6 @@ def 결과파일_초기화():
     도식화 결과를 담을 Workbook 생성
     - 기본 시트 제거
     """
-
-    print("\n[12] 결과 파일 생성…")
 
     wb = openpyxl.Workbook()
 
@@ -567,7 +581,9 @@ def 사양별_시트_생성_및_도식화(
     셀너비,
     두꺼운테두리,
     도식화_시작행,
-    도식화_시작열
+    도식화_시작열,
+    시트명_생성함수=None,
+    제목_생성함수=None,
 ):
     """
     사양별 BOM 트리를 기반으로
@@ -577,14 +593,13 @@ def 사양별_시트_생성_및_도식화(
     - 트리 도식화 수행
     """
 
-    print("\n[13] 사양별 시트 생성 + 도식화 작성…")
-
     for 사양명, 트리 in 사양별_트리.items():
 
         # --------------------------------------------------
         # 1) 시트 생성
         # --------------------------------------------------
-        ws = 결과통합문서.create_sheet(title=str(사양명)[:31])
+        시트명 = 시트명_생성함수(사양명, 결과통합문서) if 시트명_생성함수 else str(사양명)[:31]
+        ws = 결과통합문서.create_sheet(title=안전한_시트명(결과통합문서, 시트명))
 
         # --------------------------------------------------
         # 2) 열 너비 설정
@@ -604,7 +619,7 @@ def 사양별_시트_생성_및_도식화(
         ws.merge_cells(start_row=2, start_column=2, end_row=5, end_column=24)
 
         title_cell = ws.cell(row=2, column=2)
-        title_cell.value = f"{사양명} 조립단위"
+        title_cell.value = 제목_생성함수(사양명) if 제목_생성함수 else f"{사양명} 조립단위"
         title_cell.font = Font(size=32, bold=True)
         title_cell.alignment = Alignment(horizontal="center", vertical="center")
 
@@ -622,8 +637,6 @@ def 사양별_시트_생성_및_도식화(
             시작행=도식화_시작행,
             시작열=도식화_시작열
         )
-
-    print("   → 사양별 도식화 작성 완료")
 
 
 
@@ -716,17 +729,15 @@ def 부모_자식_연결선_그리기(ws, 부모노드, 자식노드목록):
 # ================================================================
 # 14-2. 트리 전체 순회하며 연결선 그리기 (함수화)
 # ================================================================
-def 트리_연결선_전체_그리기(결과통합문서, 사양별_트리):
+def 트리_연결선_전체_그리기(결과통합문서, 사양별_트리, 시트명_생성함수=None):
     """
     사양별 트리를 순회하며
     모든 부모–자식 연결선을 그림
     """
 
-    print("\n[14-2] 트리 전체 순회하면서 연결선 그리는 중…")
-
     for 사양명, 트리 in 사양별_트리.items():
-
-        ws = 결과통합문서[str(사양명)[:31]]
+        시트명 = 시트명_생성함수(사양명, 결과통합문서) if 시트명_생성함수 else str(사양명)[:31]
+        ws = 결과통합문서[시트명]
 
         def 순회(node):
             부모_자식_연결선_그리기(ws, node, node["자식"])
@@ -746,8 +757,6 @@ def 결과파일_저장(결과통합문서, 결과파일):
     결과 워크북을 지정 경로에 저장
     """
 
-    print("\n[15] 파일 저장 중…")
-
     # 디렉토리 없으면 생성
     저장폴더 = os.path.dirname(결과파일)
     if 저장폴더 and not os.path.exists(저장폴더):
@@ -755,24 +764,16 @@ def 결과파일_저장(결과통합문서, 결과파일):
 
     결과통합문서.save(결과파일)
 
-    print("🎉 완료!", 결과파일)
 
 
 
 
 
 
-
-def export_tree_excel_from_json(raw_json: dict, output_path: str):
-
-    bom_json = 신규JSON_부모참조형_변환(raw_json)
-
-    결과통합문서 = 결과파일_초기화()
-
-    # 공용 변수들 (지금 코드 그대로 유지)
+def 엑셀_스타일_초기화():
     global 전체박스_가로, 전체박스_세로
     global 레벨_이동칸, 박스_높이
-    global 두꺼운선, 얇은선, 테두리, 두꺼운테두리,빨간_두꺼운선
+    global 두꺼운선, 얇은선, 테두리, 두꺼운테두리, 빨간_두꺼운선
     global 가운데정렬, 회색채움
 
     전체박스_가로 = 12
@@ -784,15 +785,28 @@ def export_tree_excel_from_json(raw_json: dict, output_path: str):
     빨간_두꺼운선 = Side(style="thick", color="FF0000")
     얇은선 = Side(border_style="thin", color="000000")
     테두리 = Border(left=얇은선, right=얇은선, top=얇은선, bottom=얇은선)
-    두꺼운테두리 = Border(left=두꺼운선, right=두꺼운선,
-                        top=두꺼운선, bottom=두꺼운선)
+    두꺼운테두리 = Border(
+        left=두꺼운선,
+        right=두꺼운선,
+        top=두꺼운선,
+        bottom=두꺼운선,
+    )
 
     가운데정렬 = Alignment(horizontal="center", vertical="center")
-    회색채움 = PatternFill(start_color="D9D9D9", end_color="D9D9D9",
-                        fill_type="solid")
+    회색채움 = PatternFill(
+        start_color="D9D9D9",
+        end_color="D9D9D9",
+        fill_type="solid",
+    )
+
+
+def build_tree_workbook_from_json(raw_json: dict, workbook=None, sheet_name_resolver=None, title_text_resolver=None):
+    bom_json = 신규JSON_부모참조형_변환(raw_json)
+    결과통합문서 = workbook or 결과파일_초기화()
+
+    엑셀_스타일_초기화()
 
     결과_json = 부모기반_레벨적용(bom_json)
-
     전체_사양별_트리 = 부모참조형_JSON_트리변환(결과_json)
 
     사양별_시트_생성_및_도식화(
@@ -801,35 +815,21 @@ def export_tree_excel_from_json(raw_json: dict, output_path: str):
         셀너비=4.2,
         두꺼운테두리=두꺼운테두리,
         도식화_시작행=8,
-        도식화_시작열=3
+        도식화_시작열=3,
+        시트명_생성함수=sheet_name_resolver,
+        제목_생성함수=title_text_resolver,
     )
 
     트리_연결선_전체_그리기(
         결과통합문서,
-        전체_사양별_트리
+        전체_사양별_트리,
+        시트명_생성함수=sheet_name_resolver,
     )
 
+    return 결과통합문서
+
+
+def export_tree_excel_from_json(raw_json: dict, output_path: str):
+    결과통합문서 = build_tree_workbook_from_json(raw_json)
     결과파일_저장(결과통합문서, output_path)
 
-
-
-
-
-
-
-
-# ================================================================
-# [추가] 확인용 코드
-# ================================================================
-    # print(전체_사양별_트리)
-
-    # # 3️⃣ 저장 경로 (바탕화면)
-    # 저장파일명 = "with_level.json"
-    # 저장경로 = os.path.join(os.path.expanduser("~"), "Desktop", 저장파일명)
-
-    # # 4️⃣ JSON 저장
-    # with open(저장경로, "w", encoding="utf-8") as f:
-    #     json.dump(결과_json, f, ensure_ascii=False, indent=2)
-
-    # # 4️⃣ 결과 출력 (보기 좋게)
-    # print(json.dumps(결과_json, ensure_ascii=False, indent=2))

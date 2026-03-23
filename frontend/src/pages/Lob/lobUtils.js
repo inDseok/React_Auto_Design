@@ -59,6 +59,15 @@ export function formatTimeCell(value) {
   });
 }
 
+export function getWorkerEfficiencyPercent(worker, movementTime = 0) {
+  const laborSum = toNumber(worker?.totalTime) + toNumber(movementTime);
+  if (laborSum <= 0) {
+    return 0;
+  }
+
+  return (toNumber(worker?.categoryTimes?.["가치"]) / laborSum) * 100;
+}
+
 export function getWorkerSortValue(worker) {
   const normalized = String(worker ?? "").trim();
   const matched = normalized.match(/\d+/);

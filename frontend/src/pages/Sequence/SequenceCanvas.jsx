@@ -669,7 +669,7 @@ export default function SequenceCanvas({
     if (target.isContentEditable) return true;
 
     const tag = target.tagName?.toLowerCase();
-    return tag === "input" || tag === "textarea";
+    return tag === "input" || tag === "textarea" || tag === "select";
   }
 
   useEffect(() => {
@@ -684,7 +684,7 @@ export default function SequenceCanvas({
         return;
       }
 
-      if (e.shiftKey && e.key.toLowerCase() === "w") {
+      if (e.shiftKey && e.key.toLowerCase() === "c") {
         e.preventDefault();
         createWorkerGroupFromSelection();
       }
@@ -726,7 +726,7 @@ export default function SequenceCanvas({
           return;
         }
 
-        if (e.shiftKey && e.key.toLowerCase() === "w") {
+        if (e.shiftKey && e.key.toLowerCase() === "c") {
           e.preventDefault();
           createWorkerGroupFromSelection();
           return;

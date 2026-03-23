@@ -266,45 +266,6 @@ export default function SubPage() {
     }
   }
   
-  async function handleDownloadExcel() {
-    if (!state?.bomId || !state?.selectedSpec) {
-      alert("BOM과 사양을 먼저 선택하세요.");
-      return;
-    }
-  
-    try {
-      const url = `http://localhost:8000/api/sub/bom/${state.bomId}/export_excel?spec=${encodeURIComponent(
-        state.selectedSpec
-      )}`;
-  
-      const res = await fetch(url, {
-        method: "GET",
-        credentials: "include",
-      });
-  
-      if (!res.ok) {
-        throw new Error(await res.text());
-      }
-  
-      const blob = await res.blob();
-      
-      const today = new Date();
-      const yyyy = today.getFullYear();
-      const mm = String(today.getMonth() + 1).padStart(2, "0");
-      const dd = String(today.getDate()).padStart(2, "0");
-      const yyyymmdd = `${yyyy}${mm}${dd}`;
-
-      const a = document.createElement("a");
-      a.href = window.URL.createObjectURL(blob);
-      a.download = `${state.selectedSpec}_서브 부품 구성도_${yyyymmdd}.xlsx`;
-      a.click();
-      a.remove();
-  
-    } catch (e) {
-      alert("엑셀 다운로드 실패: " + String(e?.message ?? e));
-    }
-  }
-  
   /* =========================
      render
   ========================= */
@@ -340,13 +301,9 @@ export default function SubPage() {
           >
             전체 초기화
           </button>
-        
+
           <button onClick={handleAddRootNode}>
             추가
-          </button>
-
-          <button onClick={handleDownloadExcel}>
-            엑셀 다운로드
           </button>
         </Space>
       </div>

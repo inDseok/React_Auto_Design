@@ -30,6 +30,20 @@ function normalizeAssemblyRow(row) {
   };
 }
 
+function createSerializableRows(rows = []) {
+  return Array.isArray(rows)
+    ? rows.map((row) => ({
+        ...row,
+        "SEC": formatDecimalCell(row["SEC"]),
+        "TOTAL": formatDecimalCell(row["TOTAL"]),
+      }))
+    : [];
+}
+
+function getRowsSnapshot(rows = []) {
+  return JSON.stringify(createSerializableRows(rows));
+}
+
 function toNumber(value) {
   if (typeof value === "number") {
     return Number.isFinite(value) ? value : 0;
@@ -242,6 +256,7 @@ function AssemblyPage() {
   const spec = params.get("spec");
 
   const { actions } = useApp();
+  const lastSavedRowsSnapshotRef = React.useRef(getRowsSnapshot([]));
 
   const recommendWorkerCountNumber = Math.max(
     1,
@@ -277,6 +292,7 @@ function AssemblyPage() {
     }));
 
     setRows(restored);
+    lastSavedRowsSnapshotRef.current = getRowsSnapshot(restored);
   };
 
   useEffect(() => {
@@ -460,13 +476,45 @@ function AssemblyPage() {
   const handleSave = async () => {
     if (!rows.length) {
       alert("저장할 조립 총공수 데이터가 없습니다.");
-      return;
+      return false;
     }
 
     const ok = await saveRowsToDB(bomId, spec, rows);
-    if (ok) alert("저장 완료");
-    else alert("저장 실패");
+    if (ok) {
+      lastSavedRowsSnapshotRef.current = getRowsSnapshot(rows);
+      alert("저장 완료");
+    } else alert("저장 실패");
+    return ok;
   };
+
+  useEffect(() => {
+    const handleSaveRequest = async (event) => {
+      const ok = rows.length ? await saveRowsToDB(bomId, spec, rows) : true;
+
+      if (ok) {
+        lastSavedRowsSnapshotRef.current = getRowsSnapshot(rows);
+      }
+
+      event.detail?.respond?.(ok);
+    };
+
+    window.addEventListener("app:assembly-save-request", handleSaveRequest);
+    return () => {
+      window.removeEventListener("app:assembly-save-request", handleSaveRequest);
+    };
+  }, [bomId, rows, saveRowsToDB, spec]);
+
+  useEffect(() => {
+    const handleDirtyCheckRequest = (event) => {
+      const currentSnapshot = getRowsSnapshot(rows);
+      event.detail?.respond?.(currentSnapshot !== lastSavedRowsSnapshotRef.current);
+    };
+
+    window.addEventListener("app:assembly-dirty-check-request", handleDirtyCheckRequest);
+    return () => {
+      window.removeEventListener("app:assembly-dirty-check-request", handleDirtyCheckRequest);
+    };
+  }, [rows]);
 
   const handleAutoMatch = async () => {
     const added = await runAutoMatch(bomId, spec);

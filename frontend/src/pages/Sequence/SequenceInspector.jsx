@@ -69,6 +69,7 @@ export default function SequenceInspector({
   setEdges,
   bomId,
   spec,
+  onSaveSequence,
 }) {
   const selectedNode = useMemo(
     () => nodes.find((n) => n.id === selectedNodeId),
@@ -226,8 +227,6 @@ export default function SequenceInspector({
   const [options, setOptions] = useState([]);
   const [optionLoading, setOptionLoading] = useState(false);
   const [optionError, setOptionError] = useState(null);
-  const [isSaving, setIsSaving] = useState(false);
-
   // nodeId -> options cache
   const [optionCache, setOptionCache] = useState({});
   const [optionQueryCache, setOptionQueryCache] = useState({});
@@ -237,16 +236,26 @@ export default function SequenceInspector({
      OPTION fetch (type별 분기)
   ========================= */
   useEffect(() => {
-    if (!selectedNodeId) return;
-    if (isSaving) return;
+    if (!selectedNodeId) {
+      setOptions([]);
+      setOptionLoading(false);
+      setOptionError(null);
+      return;
+    }
 
     const type = selectedNodeType;
     const partBase = selectedNodePartBase;
     const sourceSheet = selectedNodeSourceSheet;
-    if (!partBase || !sourceSheet) return;
+    if (!partBase) {
+      setOptions([]);
+      setOptionLoading(false);
+      setOptionError(null);
+      return;
+    }
 
     const nodeId = selectedNodeId;
-    const requestKey = `${type}:${partBase}:${sourceSheet}`;
+    const normalizedSourceSheet = String(sourceSheet || "").trim();
+    const requestKey = `${type}:${partBase}:${normalizedSourceSheet || "*"}`;
 
     if (optionCache[nodeId]) {
       setOptions(optionCache[nodeId]);
@@ -275,9 +284,11 @@ export default function SequenceInspector({
     const requestPromise =
       pendingRequest ||
       fetch(
-        `${API_BASE}${endpoint}?partBase=${encodeURIComponent(
-          partBase
-        )}&sourceSheet=${encodeURIComponent(sourceSheet)}`,
+        `${API_BASE}${endpoint}?partBase=${encodeURIComponent(partBase)}${
+          normalizedSourceSheet
+            ? `&sourceSheet=${encodeURIComponent(normalizedSourceSheet)}`
+            : ""
+        }`,
         { credentials: "include" }
       )
         .then((res) => {
@@ -316,7 +327,6 @@ export default function SequenceInspector({
         setOptionLoading(false);
       });
   }, [
-    isSaving,
     optionCache,
     optionQueryCache,
     selectedNodeId,
@@ -325,57 +335,6 @@ export default function SequenceInspector({
     selectedNodeType,
   ]);
 
-  const saveSequence = async () => {
-    if (!bomId || !spec) {
-      alert("bomId / spec 없음");
-      return;
-    }
-
-    const latestFlowState = flowControls?.getFlowState?.() || {
-      nodes,
-      edges,
-      groups,
-      workerGroups,
-    };
-
-    const safeNodes = (latestFlowState.nodes || []).map(serializeSequenceNode);
-    const safeEdges = (latestFlowState.edges || []).map(serializeSequenceEdge);
-    const safeGroups = (latestFlowState.groups || []).map(serializeSequenceGroup);
-    const safeWorkerGroups = (latestFlowState.workerGroups || []).map(
-      serializeSequenceGroup
-    );
-  
-    try {
-      setIsSaving(true);
-      const res = await fetch(`${API_BASE}/api/sequence/save`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          bomId,
-          spec,
-          nodes: safeNodes,
-          edges: safeEdges,
-          groups: safeGroups,
-          workerGroups: safeWorkerGroups,
-        }),
-      });
-
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || "시퀀스 저장 실패");
-      }
-  
-      alert("시퀀스 저장 완료");
-    } catch (e) {
-      console.error(e);
-      alert(`저장 실패: ${e.message || "알 수 없는 오류"}`);
-    } finally {
-      setIsSaving(false);
-    }
-  };
-  
-  
   const loadSequence = async () => {
     if (!bomId || !spec) {
       alert("bomId / spec 없음");
@@ -407,6 +366,13 @@ export default function SequenceInspector({
         sourceHandle: edge.sourceHandle ?? "out",
         targetHandle: edge.targetHandle ?? "in",
       }));
+
+      setOptions([]);
+      setOptionLoading(false);
+      setOptionError(null);
+      setOptionCache({});
+      setOptionQueryCache({});
+      inFlightOptionRequestsRef.current = {};
   
       flowControls?.replaceFlowState(
         {
@@ -416,6 +382,19 @@ export default function SequenceInspector({
           workerGroups: data.workerGroups || [],
         },
         { recordHistory: false }
+      );
+
+      window.dispatchEvent(
+        new CustomEvent("app:sequence-mark-saved", {
+          detail: {
+            flowState: {
+              nodes: safeNodes,
+              edges: safeEdges,
+              groups: data.groups || [],
+              workerGroups: data.workerGroups || [],
+            },
+          },
+        })
       );
   
       alert("시퀀스 불러오기 완료");
@@ -442,7 +421,7 @@ export default function SequenceInspector({
           borderBottom: "1px solid #e5e7eb",
         }}
       >
-        <button onClick={saveSequence}>
+        <button onClick={() => onSaveSequence?.({ showAlert: true })}>
           저장
         </button>
         <button onClick={loadSequence}>불러오기</button>

@@ -4,13 +4,14 @@ from typing import Dict, List, Optional, Any
 from functools import lru_cache
 
 import json
+import io
 from uuid import uuid4
 
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from pathlib import Path
 
@@ -22,7 +23,8 @@ from typing import Optional
 from openpyxl import load_workbook
 from backend.Sub.session_store import get_or_create_sid, refresh_session_state, save_session_state, SESSION_STATE
 
-from backend.Sub.json_to_excel import export_tree_excel_from_json
+from backend.Sub.json_to_excel import export_tree_excel_from_json, 결과파일_초기화, build_tree_workbook_from_json
+from backend.Assembly.json_to_excel import append_assembly_sheet_to_workbook
 from pathlib import Path
 from backend.Assembly.auto_match import load_db_rows, normalize_text, rf_score, jw_score
 
@@ -612,4 +614,54 @@ async def export_excel(bom_id: str, spec: str):
         path=str(output_path),
         filename=f"{spec}_SUB구성도.xlsx",
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+
+@sub_router.get("/bom/{bom_id}/export_excel_bundle")
+async def export_excel_bundle(bom_id: str):
+    root = DATA_DIR / "bom_runs" / bom_id
+    if not root.exists():
+        raise HTTPException(status_code=404, detail="BOM 폴더가 없습니다.")
+
+    sub_json_paths = sorted(
+        path for path in root.glob("*.json")
+        if path.name not in {"bom_meta.json", "meta_spec.json"}
+        and not path.name.endswith("_sequence.json")
+        and not path.name.endswith("_assembly.json")
+    )
+    assembly_json_paths = sorted(root.glob("*_assembly.json"))
+
+    if not sub_json_paths and not assembly_json_paths:
+        raise HTTPException(status_code=404, detail="엑셀로 변환할 JSON 파일이 없습니다.")
+
+    workbook = 결과파일_초기화()
+
+    for json_path in sub_json_paths:
+        with open(json_path, "r", encoding="utf-8") as file:
+            raw_json = json.load(file)
+
+        workbook = build_tree_workbook_from_json(
+            raw_json,
+            workbook=workbook,
+            sheet_name_resolver=lambda _spec_name, _workbook: "1. sub단위 부품 구성도",
+            title_text_resolver=lambda spec_name: f"{spec_name} 조립단위",
+        )
+
+    for assembly_json_path in assembly_json_paths:
+        with open(assembly_json_path, "r", encoding="utf-8") as file:
+            raw_json = json.load(file)
+
+        spec_name = assembly_json_path.stem.replace("_assembly", "")
+        append_assembly_sheet_to_workbook(raw_json, workbook, spec_name)
+
+    output_buffer = io.BytesIO()
+    workbook.save(output_buffer)
+    output_buffer.seek(0)
+
+    return StreamingResponse(
+        output_buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{bom_id}_excel_bundle.xlsx"'
+        },
     )

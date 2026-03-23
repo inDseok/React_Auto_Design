@@ -88,7 +88,7 @@ export function ProcessDesignTable({ metrics }) {
     {
       no: 11,
       item: "LOB",
-      detail: "ΣHT ÷ (NECK TIME x N)",
+      detail: "공수 합계 총합 ÷ (최대 공수 합계 x 작업자 수)",
       unit: "%",
       std: formatInteger(metrics.lobPercent, "%"),
     },

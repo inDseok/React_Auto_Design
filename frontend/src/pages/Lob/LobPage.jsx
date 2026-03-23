@@ -36,22 +36,24 @@ const ZERO_TACT_INPUTS = {
   lineCount: 0,
 };
 
-const EQUIPMENT_PROCESS_NAMES = [
-  "에이밍 조정",
-  "에어블로잉",
-  "핫멜트 도포",
-  "렌즈 가압",
-  "쿨링",
-  "기밀 검사",
-  "부품누락 검사",
-  "반사경 체결기",
-  "하우징 체결기",
-  "렌즈+베젤 체결기",
-];
-
 function toNumber(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function createEquipmentRow() {
+  return {
+    id:
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `equipment-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    name: "",
+    investmentCost: "",
+    equipmentTimeInput: "",
+    manualTimeInput: "",
+    reviewChecked: false,
+    improvementNote: "",
+  };
 }
 
 function normalizeMovementTime(value) {
@@ -132,7 +134,7 @@ export default function LobPage() {
   const [movementTimeInputs, setMovementTimeInputs] = useState({});
   const [tactInputs, setTactInputs] = useState(initialTactState.tactInputs);
   const [isRealAvailableManual, setIsRealAvailableManual] = useState(initialTactState.isRealAvailableManual);
-  const [equipmentMeta, setEquipmentMeta] = useState({});
+  const [equipmentRows, setEquipmentRows] = useState([createEquipmentRow()]);
   const prevBomIdRef = useRef(bomId);
 
   useEffect(() => {
@@ -158,7 +160,7 @@ export default function LobPage() {
       setIsRealAvailableManual(false);
       setMovementTimes({});
       setMovementTimeInputs({});
-      setEquipmentMeta({});
+      setEquipmentRows([createEquipmentRow()]);
     }
 
     prevBomIdRef.current = bomId;
@@ -233,46 +235,21 @@ export default function LobPage() {
     () => workerTopMetrics.expectedCt * 0.9,
     [workerTopMetrics.expectedCt]
   );
-  const equipmentRows = useMemo(() => {
-    return EQUIPMENT_PROCESS_NAMES.map((name) => {
-      const matchedRows = rows.filter((row) => {
-        const values = [
-          row["부품 기준"],
-          row["요소작업"],
-          row["OPTION"],
-          row["동작요소"],
-          row.__groupLabel,
-          row.__sequenceGroupLabel,
-        ];
+  const normalizedEquipmentRows = useMemo(
+    () =>
+      equipmentRows.map((row) => {
+        const equipmentTime = toNumber(row.equipmentTimeInput);
+        const manualTime = toNumber(row.manualTimeInput);
 
-        return values.some((value) => String(value ?? "").includes(name));
-      });
-
-      const equipmentTime = matchedRows.reduce(
-        (sum, row) => sum + toNumber(row["TOTAL"]),
-        0
-      );
-      const equipmentTimeInput = equipmentMeta[name]?.equipmentTime;
-      const manualTimeInput = equipmentMeta[name]?.manualTime;
-      const manualTime = toNumber(manualTimeInput);
-      const normalizedEquipmentTime =
-        equipmentTimeInput === undefined || equipmentTimeInput === ""
-          ? equipmentTime
-          : toNumber(equipmentTimeInput);
-
-      return {
-        name,
-        investmentCost: equipmentMeta[name]?.investmentCost ?? "",
-        equipmentTime: normalizedEquipmentTime,
-        equipmentTimeInput: equipmentTimeInput ?? "",
-        manualTime,
-        manualTimeInput: manualTimeInput ?? "",
-        totalTime: normalizedEquipmentTime + manualTime,
-        reviewChecked: Boolean(equipmentMeta[name]?.reviewChecked),
-        improvementNote: equipmentMeta[name]?.improvementNote ?? "",
-      };
-    });
-  }, [equipmentMeta, rows]);
+        return {
+          ...row,
+          equipmentTime,
+          manualTime,
+          totalTime: equipmentTime + manualTime,
+        };
+      }),
+    [equipmentRows]
+  );
   const processDesignMetrics = useMemo(() => {
     const workerCount = summary.workers;
     const totalManualTime = summary.totalTime;
@@ -286,8 +263,21 @@ export default function LobPage() {
     const expectedUph = expectedCycleTime > 0 ? 3600 / expectedCycleTime : 0;
     const expectedUpmh = workerCount > 0 ? expectedUph / workerCount : 0;
     const minimumWorkers = tactTimeSeconds > 0 ? totalManualTime / tactTimeSeconds : 0;
+    const workerLaborSums = workerStats.map((worker) =>
+      worker.totalTime + toNumber(movementTimes[worker.worker])
+    );
+    const totalWorkerLaborSum = workerLaborSums.reduce(
+      (sum, laborSum) => sum + laborSum,
+      0
+    );
+    const maxWorkerLaborSum = workerLaborSums.reduce(
+      (max, laborSum) => Math.max(max, laborSum),
+      0
+    );
     const lobPercent =
-      neckTime > 0 && workerCount > 0 ? (totalManualTime / (neckTime * workerCount)) * 100 : 0;
+      maxWorkerLaborSum > 0 && workerCount > 0
+        ? (totalWorkerLaborSum / (maxWorkerLaborSum * workerCount)) * 100
+        : 0;
     const loadHours = expectedUph > 0 ? tactMetrics.dailyRequiredQuantity / expectedUph : 0;
     const dailyOperatingHours = tactMetrics.realAvailable / 60;
     const loadRatePercent =
@@ -310,7 +300,7 @@ export default function LobPage() {
       loadRatePercent,
       dailyLineCapacity,
     };
-  }, [summary, tactMetrics, workerTopMetrics]);
+  }, [movementTimes, summary, tactMetrics, workerStats, workerTopMetrics]);
 
   useEffect(() => {
     setMovementTimes((prev) => {
@@ -403,14 +393,24 @@ export default function LobPage() {
     }
   };
 
-  const updateEquipmentMeta = (name, patch) => {
-    setEquipmentMeta((prev) => ({
-      ...prev,
-      [name]: {
-        ...(prev[name] || {}),
-        ...patch,
-      },
-    }));
+  const updateEquipmentRow = (id, patch) => {
+    setEquipmentRows((prev) =>
+      prev.map((row) => (row.id === id ? { ...row, ...patch } : row))
+    );
+  };
+
+  const handleAddEquipmentRow = () => {
+    setEquipmentRows((prev) => [...prev, createEquipmentRow()]);
+  };
+
+  const handleRemoveEquipmentRow = (id) => {
+    setEquipmentRows((prev) => {
+      if (prev.length <= 1) {
+        return [createEquipmentRow()];
+      }
+
+      return prev.filter((row) => row.id !== id);
+    });
   };
 
   if (!bomId || !spec) {
@@ -516,8 +516,27 @@ export default function LobPage() {
               <div>
                 <div style={{ fontSize: 24, fontWeight: 700, color: "#102a43" }}>설비 공정 표</div>
                 <div style={{ color: "#526071", marginTop: 6 }}>
-                  지정된 설비 공정명이 행에 포함되면 해당 시간 합계를 표와 그래프에 반영합니다.
+                  설비 추가를 눌러 공정명부터 장비 시간, 수작업 시간, 투자 금액까지 직접 입력합니다.
                 </div>
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <button
+                  type="button"
+                  onClick={handleAddEquipmentRow}
+                  style={{
+                    padding: "10px 14px",
+                    borderRadius: 12,
+                    border: "1px solid #bfdbfe",
+                    background: "#eff6ff",
+                    color: "#1d4ed8",
+                    fontSize: 13,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                  }}
+                >
+                  설비 추가
+                </button>
               </div>
 
               <div style={{ overflowX: "auto" }}>
@@ -539,6 +558,7 @@ export default function LobPage() {
                         "합 계",
                         "검토사항 체크",
                         "개선 사항",
+                        "관리",
                       ].map((label) => (
                         <th
                           key={label}
@@ -556,31 +576,51 @@ export default function LobPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {equipmentRows.map((row) => (
+                    {normalizedEquipmentRows.map((row) => (
                       <tr
-                        key={row.name}
+                        key={row.id}
                         style={{
                           borderBottom: "1px solid #e5e7eb",
                           background: row.reviewChecked ? "#fef2f2" : "#ffffff",
                         }}
                       >
-                        <td style={equipmentCellStyle}>{row.name}</td>
+                        <td style={equipmentCellStyle}>
+                          <input
+                            type="text"
+                            value={row.name}
+                            onChange={(e) =>
+                              updateEquipmentRow(row.id, {
+                                name: e.target.value,
+                              })
+                            }
+                            placeholder="공정명 입력"
+                            lang="ko"
+                            autoCapitalize="off"
+                            autoCorrect="off"
+                            spellCheck={false}
+                            style={equipmentInputStyle}
+                          />
+                        </td>
                         <td style={equipmentCellStyle}>
                           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                             <input
                               type="text"
                               value={row.investmentCost}
                               onChange={(e) =>
-                                updateEquipmentMeta(row.name, {
+                                updateEquipmentRow(row.id, {
                                   investmentCost: e.target.value,
                                 })
                               }
+                              lang="ko"
+                              autoCapitalize="off"
+                              autoCorrect="off"
+                              spellCheck={false}
                               style={equipmentInputStyle}
                             />
                             <button
                               type="button"
                               onClick={() =>
-                                updateEquipmentMeta(row.name, {
+                                updateEquipmentRow(row.id, {
                                   investmentCost: "기존 활용",
                                 })
                               }
@@ -597,8 +637,8 @@ export default function LobPage() {
                             step={0.01}
                             value={row.equipmentTimeInput}
                             onChange={(e) =>
-                              updateEquipmentMeta(row.name, {
-                                equipmentTime: e.target.value,
+                              updateEquipmentRow(row.id, {
+                                equipmentTimeInput: e.target.value,
                               })
                             }
                             style={equipmentInputStyle}
@@ -611,8 +651,8 @@ export default function LobPage() {
                             step={0.01}
                             value={row.manualTimeInput}
                             onChange={(e) =>
-                              updateEquipmentMeta(row.name, {
-                                manualTime: e.target.value,
+                              updateEquipmentRow(row.id, {
+                                manualTimeInput: e.target.value,
                               })
                             }
                             style={equipmentInputStyle}
@@ -624,7 +664,7 @@ export default function LobPage() {
                             type="checkbox"
                             checked={row.reviewChecked}
                             onChange={(e) =>
-                              updateEquipmentMeta(row.name, {
+                              updateEquipmentRow(row.id, {
                                 reviewChecked: e.target.checked,
                               })
                             }
@@ -635,12 +675,34 @@ export default function LobPage() {
                             type="text"
                             value={row.improvementNote}
                             onChange={(e) =>
-                              updateEquipmentMeta(row.name, {
+                              updateEquipmentRow(row.id, {
                                 improvementNote: e.target.value,
                               })
                             }
+                            lang="ko"
+                            autoCapitalize="off"
+                            autoCorrect="off"
+                            spellCheck={false}
                             style={equipmentInputStyle}
                           />
+                        </td>
+                        <td style={equipmentCellStyle}>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveEquipmentRow(row.id)}
+                            style={{
+                              padding: "8px 10px",
+                              borderRadius: 10,
+                              border: "1px solid #fecaca",
+                              background: "#fff1f2",
+                              color: "#b91c1c",
+                              fontSize: 12,
+                              fontWeight: 700,
+                              cursor: "pointer",
+                            }}
+                          >
+                            삭제
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -649,7 +711,11 @@ export default function LobPage() {
               </div>
             </section>
 
-            <EquipmentStackedBarChart equipmentRows={equipmentRows} />
+            <EquipmentStackedBarChart
+              equipmentRows={normalizedEquipmentRows.filter(
+                (row) => row.name.trim() || row.totalTime > 0 || row.investmentCost || row.improvementNote
+              )}
+            />
           </>
         ) : activeView === "process-design" ? (
           <ProcessDesignTable metrics={processDesignMetrics} />

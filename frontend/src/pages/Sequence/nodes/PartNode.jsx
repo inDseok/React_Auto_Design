@@ -3,6 +3,7 @@ import { Handle, Position } from "@xyflow/react";
 
 export default function PartNode({ data, selected }) {
   const { inhouse, statusLabel, isAssemblyImported } = data;
+  const isOptionMissing = !String(data.option || "").trim();
   const handleColor = isAssemblyImported ? "#0f766e" : "#2563eb";
 
   return (
@@ -13,12 +14,20 @@ export default function PartNode({ data, selected }) {
         borderRadius: 8,
         border: selected
           ? `2px solid ${isAssemblyImported ? "#0f766e" : "#2563eb"}`
-          : `1px solid ${isAssemblyImported ? "#99f6e4" : "#cbd5e1"}`,
-        background: isAssemblyImported ? "#ecfeff" : "#f8fafc",
+          : isOptionMissing
+            ? "2px solid #dc2626"
+            : `1px solid ${isAssemblyImported ? "#99f6e4" : "#cbd5e1"}`,
+        background: isOptionMissing
+          ? "#fff7f7"
+          : isAssemblyImported
+            ? "#ecfeff"
+            : "#f8fafc",
         boxShadow: selected
           ? isAssemblyImported
             ? "0 0 0 2px rgba(15,118,110,0.15)"
             : "0 0 0 2px rgba(37,99,235,0.15)"
+          : isOptionMissing
+            ? "0 0 0 2px rgba(220,38,38,0.12)"
           : "0 1px 3px rgba(0,0,0,0.1)",
         fontSize: 12,
         position: "relative",
@@ -36,20 +45,37 @@ export default function PartNode({ data, selected }) {
         }}
       >
         <div style={{ fontWeight: 600 }}>PART</div>
-        <div
-          style={{
-            fontSize: 10,
-            padding: "2px 6px",
-            borderRadius: 6,
-            background: isAssemblyImported
-              ? "#0f766e"
-              : inhouse
-                ? "#2563eb"
-                : "#64748b",
-            color: "#fff",
-          }}
-        >
-          {isAssemblyImported ? "ASM" : inhouse ? "IN" : "OUT"}
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          {isOptionMissing && (
+            <div
+              style={{
+                fontSize: 10,
+                padding: "2px 6px",
+                borderRadius: 6,
+                background: "#fee2e2",
+                color: "#b91c1c",
+                border: "1px solid #fecaca",
+                fontWeight: 700,
+              }}
+            >
+              OPTION
+            </div>
+          )}
+          <div
+            style={{
+              fontSize: 10,
+              padding: "2px 6px",
+              borderRadius: 6,
+              background: isAssemblyImported
+                ? "#0f766e"
+                : inhouse
+                  ? "#2563eb"
+                  : "#64748b",
+              color: "#fff",
+            }}
+          >
+            {isAssemblyImported ? "ASM" : inhouse ? "IN" : "OUT"}
+          </div>
         </div>
       </div>
       
@@ -66,6 +92,19 @@ export default function PartNode({ data, selected }) {
         >
           {data.partBase ?? data.partId}
         </div>
+
+        {isOptionMissing && (
+          <div
+            style={{
+              marginTop: 2,
+              fontSize: 11,
+              color: "#b91c1c",
+              fontWeight: 600,
+            }}
+          >
+            OPTION 미선택
+          </div>
+        )}
 
         {statusLabel && (
           <div

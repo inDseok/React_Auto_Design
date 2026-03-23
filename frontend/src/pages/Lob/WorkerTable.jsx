@@ -1,5 +1,5 @@
 import React from "react";
-import { formatRatio, formatTimeCell } from "./lobUtils";
+import { formatRatio, formatTimeCell, getWorkerEfficiencyPercent } from "./lobUtils";
 
 function cellStyle(textAlign) {
   return {
@@ -34,8 +34,21 @@ export function WorkerTable({
     { "가치": 0, "필비": 0, "낭비": 0, "이동시간": 0, "공수 합계": 0 }
   );
 
-  const totalEfficiency =
-    grandTotals["공수 합계"] > 0 ? (grandTotals["가치"] / grandTotals["공수 합계"]) * 100 : 0;
+  const workerLaborSums = workerStats.map((worker) =>
+    worker.totalTime + (movementTimes[worker.worker] ?? 0)
+  );
+  const totalLaborSum = workerLaborSums.reduce(
+    (sum, laborSum) => sum + laborSum,
+    0
+  );
+  const maxWorkerLaborSum = workerLaborSums.reduce(
+    (max, laborSum) => Math.max(max, laborSum),
+    0
+  );
+  const normalizedTotalEfficiency =
+    maxWorkerLaborSum > 0 && workerStats.length > 0
+      ? (totalLaborSum / (maxWorkerLaborSum * workerStats.length)) * 100
+      : 0;
 
   return (
     <div
@@ -117,7 +130,7 @@ export function WorkerTable({
               {workerStats.map((worker) => {
                 const movementTime = movementTimes[worker.worker] ?? 0;
                 const laborSum = worker.totalTime + movementTime;
-                const efficiency = laborSum > 0 ? (worker.categoryTimes["가치"] / laborSum) * 100 : 0;
+                const efficiency = getWorkerEfficiencyPercent(worker, movementTime);
 
                 let content = formatTimeCell(worker.categoryTimes[rowDef.key] ?? 0);
 
@@ -164,7 +177,7 @@ export function WorkerTable({
                   : rowDef.total
                     ? formatTimeCell(grandTotals["공수 합계"])
                     : rowDef.ratio
-                      ? formatRatio(totalEfficiency)
+                      ? formatRatio(normalizedTotalEfficiency)
                       : formatTimeCell(grandTotals[rowDef.key] ?? 0)}
               </td>
             </tr>

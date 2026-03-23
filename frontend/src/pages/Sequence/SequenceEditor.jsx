@@ -6,6 +6,111 @@ import SequenceCanvas from "./SequenceCanvas";
 import SequenceInspector from "./SequenceInspector";
 
 const API_BASE = "http://localhost:8000";
+const SEQUENCE_DRAFT_STORAGE_PREFIX = "sequence_editor_draft_v1";
+
+function getSequenceDraftStorageKey(bomId, spec) {
+  if (!bomId || !spec) return null;
+  return `${SEQUENCE_DRAFT_STORAGE_PREFIX}:${bomId}:${spec}`;
+}
+
+function createSerializableFlowState(flowState = {}) {
+  return {
+    nodes: Array.isArray(flowState.nodes)
+      ? flowState.nodes.map((node, idx) => ({
+          id: node.id,
+          type: node.type,
+          position:
+            node.position &&
+            typeof node.position.x === "number" &&
+            typeof node.position.y === "number"
+              ? node.position
+              : {
+                  x: 100 + (idx % 5) * 220,
+                  y: 100 + Math.floor(idx / 5) * 120,
+                },
+          data: node.data || {},
+        }))
+      : [],
+    edges: Array.isArray(flowState.edges)
+      ? flowState.edges.map((edge) => ({
+          id: edge.id,
+          source: edge.source,
+          target: edge.target,
+          type: edge.type || "smoothstep",
+          sourceHandle: edge.sourceHandle ?? "out",
+          targetHandle: edge.targetHandle ?? "in",
+          data: edge.data || {},
+        }))
+      : [],
+    groups: Array.isArray(flowState.groups)
+      ? flowState.groups.map((group) => ({
+          id: group.id,
+          label: group.label || "",
+          nodeIds: Array.isArray(group.nodeIds) ? group.nodeIds : [],
+        }))
+      : [],
+    workerGroups: Array.isArray(flowState.workerGroups)
+      ? flowState.workerGroups.map((group) => ({
+          id: group.id,
+          label: group.label || "",
+          nodeIds: Array.isArray(group.nodeIds) ? group.nodeIds : [],
+        }))
+      : [],
+  };
+}
+
+function getFlowStateSnapshot(flowState = {}) {
+  return JSON.stringify(createSerializableFlowState(flowState));
+}
+
+function loadSequenceDraft(bomId, spec) {
+  const storageKey = getSequenceDraftStorageKey(bomId, spec);
+  if (!storageKey) return null;
+
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+
+    return {
+      flowState: createSerializableFlowState(parsed.flowState || {}),
+      selectedNodeId: parsed.selectedNodeId ?? null,
+      selectedEdgeId: parsed.selectedEdgeId ?? null,
+      lastSavedSnapshot:
+        typeof parsed.lastSavedSnapshot === "string"
+          ? parsed.lastSavedSnapshot
+          : null,
+    };
+  } catch (error) {
+    console.error("Failed to load sequence draft", error);
+    return null;
+  }
+}
+
+function persistSequenceDraft({
+  bomId,
+  spec,
+  flowState,
+  selectedNodeId,
+  selectedEdgeId,
+  lastSavedSnapshot,
+}) {
+  const storageKey = getSequenceDraftStorageKey(bomId, spec);
+  if (!storageKey) return;
+
+  localStorage.setItem(
+    storageKey,
+    JSON.stringify({
+      flowState: createSerializableFlowState(flowState),
+      selectedNodeId,
+      selectedEdgeId,
+      lastSavedSnapshot: lastSavedSnapshot ?? null,
+      savedAt: Date.now(),
+    })
+  );
+}
 
 function isTextEditingTarget(target) {
   if (!target) return false;
@@ -42,6 +147,8 @@ export default function SequenceEditor() {
   const historyRef = useRef([]);
   const redoHistoryRef = useRef([]);
   const flowStateRef = useRef(flowState);
+  const lastSavedSnapshotRef = useRef(getFlowStateSnapshot(flowState));
+  const restoredDraftKeyRef = useRef(null);
   const HISTORY_LIMIT = 80;
 
   const nodes = flowState.nodes;
@@ -54,6 +161,65 @@ export default function SequenceEditor() {
   useEffect(() => {
     flowStateRef.current = flowState;
   }, [flowState]);
+
+  useEffect(() => {
+    const storageKey = getSequenceDraftStorageKey(bomId, spec);
+
+    if (!storageKey) {
+      restoredDraftKeyRef.current = null;
+      return;
+    }
+
+    if (restoredDraftKeyRef.current === storageKey) {
+      return;
+    }
+
+    const draft = loadSequenceDraft(bomId, spec);
+    if (draft) {
+      setFlowState(draft.flowState);
+      flowStateRef.current = draft.flowState;
+      setSelectedNodeId(draft.selectedNodeId);
+      setSelectedEdgeId(draft.selectedEdgeId);
+      lastSavedSnapshotRef.current =
+        draft.lastSavedSnapshot ?? getFlowStateSnapshot(draft.flowState);
+    } else {
+      const emptyFlowState = {
+        nodes: [],
+        edges: [],
+        groups: [],
+        workerGroups: [],
+      };
+      setFlowState(emptyFlowState);
+      flowStateRef.current = emptyFlowState;
+      setSelectedNodeId(null);
+      setSelectedEdgeId(null);
+      lastSavedSnapshotRef.current = getFlowStateSnapshot(emptyFlowState);
+    }
+
+    historyRef.current = [];
+    redoHistoryRef.current = [];
+    restoredDraftKeyRef.current = storageKey;
+  }, [bomId, spec]);
+
+  useEffect(() => {
+    const storageKey = getSequenceDraftStorageKey(bomId, spec);
+    if (!storageKey) {
+      return;
+    }
+
+    if (restoredDraftKeyRef.current !== storageKey) {
+      return;
+    }
+
+    persistSequenceDraft({
+      bomId,
+      spec,
+      flowState,
+      selectedNodeId,
+      selectedEdgeId,
+      lastSavedSnapshot: lastSavedSnapshotRef.current,
+    });
+  }, [bomId, flowState, selectedEdgeId, selectedNodeId, spec]);
 
   const applyFlowChange = useCallback(
     (updater, options = {}) => {
@@ -164,6 +330,67 @@ export default function SequenceEditor() {
   const [manualPartBases, setManualPartBases] = useState([]);
   const [manualSheet, setManualSheet] = useState("");
   const [manualPartBase, setManualPartBase] = useState("");
+
+  const saveSequence = useCallback(
+    async ({ showAlert = true } = {}) => {
+      if (!bomId || !spec) {
+        if (showAlert) {
+          alert("bomId / spec 없음");
+        }
+        return false;
+      }
+
+      const latestFlowState = flowStateRef.current || {
+        nodes: [],
+        edges: [],
+        groups: [],
+        workerGroups: [],
+      };
+      const serializedFlowState = createSerializableFlowState(latestFlowState);
+
+      try {
+        const res = await fetch(`${API_BASE}/api/sequence/save`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            bomId,
+            spec,
+            nodes: serializedFlowState.nodes,
+            edges: serializedFlowState.edges,
+            groups: serializedFlowState.groups,
+            workerGroups: serializedFlowState.workerGroups,
+          }),
+        });
+
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || "시퀀스 저장 실패");
+        }
+
+        if (showAlert) {
+          alert("시퀀스 저장 완료");
+        }
+        lastSavedSnapshotRef.current = JSON.stringify(serializedFlowState);
+        persistSequenceDraft({
+          bomId,
+          spec,
+          flowState: latestFlowState,
+          selectedNodeId,
+          selectedEdgeId,
+          lastSavedSnapshot: lastSavedSnapshotRef.current,
+        });
+        return true;
+      } catch (error) {
+        console.error(error);
+        if (showAlert) {
+          alert(`저장 실패: ${error.message || "알 수 없는 오류"}`);
+        }
+        return false;
+      }
+    },
+    [bomId, spec]
+  );
 
   // ===============================
   // Helpers
@@ -447,6 +674,49 @@ export default function SequenceEditor() {
     return () => window.removeEventListener("keydown", handleWindowKeyDown);
   }, [onKeyDown]);
 
+  useEffect(() => {
+    const handleSaveRequest = async (event) => {
+      const result = await saveSequence({ showAlert: false });
+      event.detail?.respond?.(result);
+    };
+
+    window.addEventListener("app:sequence-save-request", handleSaveRequest);
+    return () => {
+      window.removeEventListener("app:sequence-save-request", handleSaveRequest);
+    };
+  }, [saveSequence]);
+
+  useEffect(() => {
+    const handleDirtyCheckRequest = (event) => {
+      const currentSnapshot = getFlowStateSnapshot(flowStateRef.current);
+      event.detail?.respond?.(currentSnapshot !== lastSavedSnapshotRef.current);
+    };
+
+    window.addEventListener("app:sequence-dirty-check-request", handleDirtyCheckRequest);
+    return () => {
+      window.removeEventListener("app:sequence-dirty-check-request", handleDirtyCheckRequest);
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleMarkSaved = (event) => {
+      lastSavedSnapshotRef.current = getFlowStateSnapshot(event.detail?.flowState || {});
+      persistSequenceDraft({
+        bomId,
+        spec,
+        flowState: flowStateRef.current,
+        selectedNodeId,
+        selectedEdgeId,
+        lastSavedSnapshot: lastSavedSnapshotRef.current,
+      });
+    };
+
+    window.addEventListener("app:sequence-mark-saved", handleMarkSaved);
+    return () => {
+      window.removeEventListener("app:sequence-mark-saved", handleMarkSaved);
+    };
+  }, [bomId, selectedEdgeId, selectedNodeId, spec]);
+
   // ===============================
   // bomId/spec 없을 때 가드 UI
   // ===============================
@@ -630,6 +900,7 @@ export default function SequenceEditor() {
           setEdges={setEdges}
           bomId={bomId}
           spec={spec}
+          onSaveSequence={saveSequence}
         />
       </div>
     </div>
