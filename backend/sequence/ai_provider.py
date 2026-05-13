@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import gc
 import json
 import logging
 import os
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import requests
 from fastapi import HTTPException
@@ -48,25 +47,6 @@ OPENAI_BASE_URL = os.getenv("SEQUENCE_AI_OPENAI_BASE_URL", "https://api.openai.c
 OPENAI_MODEL = os.getenv("SEQUENCE_AI_OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_TIMEOUT_SECONDS = float(os.getenv("SEQUENCE_AI_OPENAI_TIMEOUT_SECONDS", "90"))
-LOCAL_MODEL_PATH = os.getenv(
-    "SEQUENCE_AI_LOCAL_MODEL_PATH",
-    str(Path("backend/finetune_sequence/models/Llama-3.1-8B-Instruct")),
-)
-LOCAL_ADAPTER_PATH = os.getenv(
-    "SEQUENCE_AI_LOCAL_ADAPTER_PATH",
-    str(Path("backend/finetune_sequence/outputs/lora")),
-)
-LOCAL_OFFLOAD_DIR = os.getenv(
-    "SEQUENCE_AI_LOCAL_OFFLOAD_DIR",
-    str(Path("backend/finetune_sequence/outputs/offload")),
-)
-LOCAL_DEVICE_MODE = os.getenv("SEQUENCE_AI_LOCAL_DEVICE_MODE", "gpu_only").strip().lower()
-LOCAL_GPU_INDEX = int(os.getenv("SEQUENCE_AI_LOCAL_GPU_INDEX", "0"))
-LOCAL_KEEP_MODEL_LOADED = os.getenv("SEQUENCE_AI_KEEP_MODEL_LOADED", "0").strip().lower() in {"1", "true", "yes", "on"}
-LOCAL_MAX_NEW_TOKENS = int(os.getenv("SEQUENCE_AI_LOCAL_MAX_NEW_TOKENS", "192"))
-LOCAL_TEMPERATURE = float(os.getenv("SEQUENCE_AI_LOCAL_TEMPERATURE", "0.0"))
-
-_LOCAL_MODEL_CACHE: Optional[Tuple[Any, Any, str, str]] = None
 
 
 def _is_truthy_env(value: str) -> bool:
@@ -403,228 +383,6 @@ def _decode_json_string(value: str) -> str:
         return value.replace('\\"', '"').replace("\\n", "\n").replace("\\t", "\t").strip()
 
 
-def _resolve_existing_path(path_str: str) -> Optional[Path]:
-    path = Path(path_str)
-    return path if path.exists() else None
-
-
-def _load_local_generation_model() -> Tuple[Any, Any, str, str]:
-    global _LOCAL_MODEL_CACHE
-
-    model_path = _resolve_existing_path(LOCAL_MODEL_PATH)
-    if model_path is None:
-        raise HTTPException(
-            status_code=500,
-            detail=f"로컬 파인튜닝 모델 경로를 찾을 수 없습니다: {LOCAL_MODEL_PATH}",
-        )
-
-    adapter_path = _resolve_existing_path(LOCAL_ADAPTER_PATH)
-    model_key = str(model_path.resolve())
-    adapter_key = str(adapter_path.resolve()) if adapter_path else ""
-
-    if _LOCAL_MODEL_CACHE and _LOCAL_MODEL_CACHE[2] == model_key and _LOCAL_MODEL_CACHE[3] == adapter_key:
-        _emit_progress("[MODEL_CACHE_HIT]", f"model={model_key} adapter={adapter_key or '-'}")
-        return _LOCAL_MODEL_CACHE
-
-    try:
-        import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer
-    except ImportError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail="로컬 파인튜닝 모델 사용을 위해 transformers/torch 패키지가 필요합니다.",
-        ) from exc
-
-    tokenizer_source = str(adapter_path) if adapter_path else str(model_path)
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, use_fast=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    if torch.cuda.is_available():
-        cuda_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-    else:
-        cuda_dtype = torch.float32
-
-    model_kwargs: Dict[str, Any] = {
-        "dtype": cuda_dtype,
-    }
-    if torch.cuda.is_available():
-        if LOCAL_DEVICE_MODE == "gpu_only":
-            model_kwargs["device_map"] = {"": LOCAL_GPU_INDEX}
-        else:
-            model_kwargs["device_map"] = "auto"
-            offload_dir = Path(LOCAL_OFFLOAD_DIR)
-            offload_dir.mkdir(parents=True, exist_ok=True)
-            model_kwargs["offload_folder"] = str(offload_dir)
-
-    model = AutoModelForCausalLM.from_pretrained(str(model_path), **model_kwargs)
-    _emit_progress("[BASE_MODEL_READY]", f"model={model_key}")
-
-    if adapter_path:
-        _emit_progress("[ADAPTER_LOAD_START]", f"adapter={adapter_key or '-'}")
-        try:
-            from peft import PeftModel
-        except ImportError as exc:
-            raise HTTPException(
-                status_code=500,
-                detail="로컬 파인튜닝 adapter 사용을 위해 peft 패키지가 필요합니다.",
-            ) from exc
-        peft_kwargs: Dict[str, Any] = {}
-        if torch.cuda.is_available():
-            if LOCAL_DEVICE_MODE == "gpu_only":
-                peft_kwargs["device_map"] = {"": LOCAL_GPU_INDEX}
-            else:
-                peft_kwargs["offload_folder"] = str(Path(LOCAL_OFFLOAD_DIR))
-        model = PeftModel.from_pretrained(model, str(adapter_path), **peft_kwargs)
-        _emit_progress("[ADAPTER_LOAD_DONE]", f"adapter={adapter_key or '-'}")
-
-    model.eval()
-    _configure_generation_defaults(model)
-    _emit_progress(
-        "[MODEL_LOADED]",
-        "provider=finetuned_local "
-        f"model={model_key} adapter={adapter_key or '-'} "
-        f"deviceMode={LOCAL_DEVICE_MODE} keepLoaded={LOCAL_KEEP_MODEL_LOADED}",
-    )
-    _LOCAL_MODEL_CACHE = (tokenizer, model, model_key, adapter_key)
-    return _LOCAL_MODEL_CACHE
-
-
-def _release_local_model(tokenizer: Any, model: Any) -> None:
-    global _LOCAL_MODEL_CACHE
-
-    if LOCAL_KEEP_MODEL_LOADED:
-        _emit_progress("[MODEL_RELEASE_SKIPPED]", "keepLoaded=true")
-        return
-
-    _LOCAL_MODEL_CACHE = None
-
-    try:
-        import torch
-    except ImportError:
-        torch = None  # type: ignore[assignment]
-
-    del tokenizer
-    del model
-    gc.collect()
-
-    if torch is not None and torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        if hasattr(torch.cuda, "ipc_collect"):
-            torch.cuda.ipc_collect()
-    _emit_progress("[MODEL_RELEASED]", "cacheCleared=true")
-
-
-def _configure_generation_defaults(model: Any) -> None:
-    generation_config = getattr(model, "generation_config", None)
-    if generation_config is None:
-        return
-
-    generation_config.do_sample = LOCAL_TEMPERATURE > 0
-    if generation_config.do_sample:
-        generation_config.temperature = max(LOCAL_TEMPERATURE, 1e-6)
-        generation_config.top_p = 0.95
-    else:
-        generation_config.temperature = None
-        generation_config.top_p = None
-
-
-def generate_sequence_draft_with_local_model(
-    payload: SequenceAIDraftRequest,
-    context: Dict[str, Any] | None = None,
-) -> Dict[str, Any]:
-    started_at = time.perf_counter()
-    prompt = _build_user_prompt(payload, context)
-    system_prompt = _build_system_prompt()
-    tokenizer, model, _, _ = _load_local_generation_model()
-    try:
-        _emit_progress(
-            "[LOCAL_GENERATE_START]",
-            f"bomId={payload.bomId} spec={payload.spec} "
-            f"selectedParts={len(payload.selectedParts or [])} "
-            f"processTemplates={len(payload.processTemplates or [])}",
-        )
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt},
-        ]
-        if hasattr(tokenizer, "apply_chat_template"):
-            rendered_prompt = tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True,
-            )
-        else:
-            rendered_prompt = f"SYSTEM: {system_prompt}\nUSER: {prompt}\nASSISTANT:"
-
-        encoded = tokenizer(rendered_prompt, return_tensors="pt")
-        _emit_progress("[PROMPT_TOKENIZED]", f"inputTokens={encoded['input_ids'].shape[1]}")
-        first_device = next(
-            (parameter.device for parameter in model.parameters() if parameter.device.type != "meta"),
-            None,
-        )
-        target_device = first_device if first_device is not None else model.device
-        encoded = {key: value.to(target_device) for key, value in encoded.items()}
-        _emit_progress("[INPUT_MOVED]", f"device={target_device}")
-
-        try:
-            import torch
-
-            do_sample = LOCAL_TEMPERATURE > 0
-            generation_kwargs: Dict[str, Any] = {
-                "max_new_tokens": LOCAL_MAX_NEW_TOKENS,
-                "do_sample": do_sample,
-                "pad_token_id": tokenizer.pad_token_id,
-                "eos_token_id": tokenizer.eos_token_id,
-            }
-            if do_sample:
-                generation_kwargs["temperature"] = max(LOCAL_TEMPERATURE, 1e-6)
-                generation_kwargs["top_p"] = 0.95
-
-            _emit_progress(
-                "[GENERATE_CALL]",
-                f"maxNewTokens={LOCAL_MAX_NEW_TOKENS} doSample={do_sample}",
-            )
-            with torch.inference_mode():
-                generated = model.generate(
-                    **encoded,
-                    **generation_kwargs,
-                )
-        except Exception as exc:
-            raise HTTPException(
-                status_code=500,
-                detail=f"로컬 파인튜닝 모델 추론 실패: {exc}",
-            ) from exc
-
-        generated_tokens = generated[0][encoded["input_ids"].shape[1] :]
-        raw_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
-        _emit_progress(
-            "[LOCAL_GENERATE_DONE]",
-            f"bomId={payload.bomId} spec={payload.spec} "
-            f"responseChars={len(raw_text)} elapsed={time.perf_counter() - started_at:.2f}s",
-        )
-        try:
-            parsed = _extract_json_object(raw_text)
-        except Exception as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=f"로컬 파인튜닝 모델 JSON 파싱 실패: {exc}",
-            ) from exc
-
-        model_name = Path(LOCAL_MODEL_PATH).name
-        if _resolve_existing_path(LOCAL_ADAPTER_PATH):
-            model_name = f"{model_name}+{Path(LOCAL_ADAPTER_PATH).name}"
-
-        return {
-            "provider": "finetuned_local",
-            "model": model_name,
-            "draft": parsed,
-            "raw": {"response": raw_text},
-        }
-    finally:
-        _release_local_model(tokenizer, model)
-
-
 def generate_sequence_draft_with_ollama(
     payload: SequenceAIDraftRequest,
     context: Dict[str, Any] | None = None,
@@ -921,8 +679,6 @@ def generate_sequence_draft(
     context: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     provider = _resolve_sequence_ai_provider()
-    if provider == "finetuned_local":
-        return generate_sequence_draft_with_local_model(payload, context)
     if provider == "openai":
         return generate_sequence_draft_with_openai(payload, context)
     return generate_sequence_draft_with_ollama(payload, context)

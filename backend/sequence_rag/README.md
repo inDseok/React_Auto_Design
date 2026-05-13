@@ -4,7 +4,7 @@
 
 ## Files
 
-- `cli.py`: builds `data/graph_index.json` from `backend/finetune_sequence/sequences`
+- `cli.py`: builds `data/graph_index.json` from a sequence JSON directory
 - `neo4j_export.py`: converts `graph_index.json` into a Cypher import script
 - `neo4j_to_index.py`: exports edited Neo4j graph data back into `data/neo4j_2_graph_index.json`
 - `neo4j_retriever.py`: queries Neo4j for graph-backed RAG references
@@ -13,7 +13,7 @@
 ## Build the index
 
 ```powershell
-python -m backend.sequence_rag.cli --output backend/sequence_rag/data/graph_index.json
+python -m backend.sequence_rag.cli --sequence-dir backend/sequence_rag/source_sequences --output backend/sequence_rag/data/graph_index.json
 ```
 
 ## Export to Neo4j Cypher
@@ -59,6 +59,7 @@ $env:SEQUENCE_NEO4J_URI="bolt://localhost:7687"
 $env:SEQUENCE_NEO4J_USER="neo4j"
 $env:SEQUENCE_NEO4J_PASSWORD="your-password"
 $env:SEQUENCE_NEO4J_DATABASE="neo4j"
+$env:SEQUENCE_SOURCE_SEQUENCE_DIR="backend/sequence_rag/source_sequences"
 ```
 
 Modes:

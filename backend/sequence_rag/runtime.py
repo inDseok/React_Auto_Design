@@ -21,7 +21,10 @@ RAG_BACKEND = os.getenv("SEQUENCE_RAG_BACKEND", "hybrid").strip().lower()
 
 
 def _default_sequence_dir() -> Path:
-    return Path(__file__).resolve().parent.parent / "finetune_sequence" / "sequences"
+    configured_dir = os.getenv("SEQUENCE_SOURCE_SEQUENCE_DIR", "").strip()
+    if configured_dir:
+        return Path(configured_dir)
+    return Path(__file__).resolve().parent / "source_sequences"
 
 
 def _default_index_path() -> Path:
@@ -292,7 +295,14 @@ def get_or_build_index(
         _INDEX_PATH_CACHE = str(resolved_index_path)
         return _INDEX_CACHE
 
-    built_index = build_index_from_sequence_dir(sequence_dir or _default_sequence_dir())
+    resolved_sequence_dir = (sequence_dir or _default_sequence_dir()).resolve()
+    if not resolved_sequence_dir.exists():
+        raise FileNotFoundError(
+            "시퀀스 RAG 인덱스를 만들 원본 디렉터리를 찾을 수 없습니다. "
+            f"SEQUENCE_SOURCE_SEQUENCE_DIR 또는 --sequence-dir로 경로를 지정해주세요: {resolved_sequence_dir}"
+        )
+
+    built_index = build_index_from_sequence_dir(resolved_sequence_dir)
     write_index(built_index, resolved_index_path)
     _INDEX_CACHE = built_index
     _INDEX_PATH_CACHE = str(resolved_index_path)

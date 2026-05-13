@@ -11,7 +11,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--sequence-dir",
-        default=str(base_dir.parent / "finetune_sequence" / "sequences"),
+        default=str(base_dir / "source_sequences"),
     )
     parser.add_argument(
         "--output",
