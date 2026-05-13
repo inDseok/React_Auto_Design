@@ -32,7 +32,7 @@ BOM Upload
 - Frontend: `React`, `Vite`, `React Router`, `Ant Design`, `React Flow`
 - Backend: `FastAPI`
 - Data/Excel: `openpyxl`, `pandas`
-- Search/AI: embedding search, graph-style RAG, Ollama/OpenAI provider
+- Search/AI: embedding search, graph-style RAG, sequence recommendation pipeline
 
 ## Project Structure
 
@@ -83,11 +83,6 @@ Optional `.env` values:
 ```env
 FRONTEND_ORIGIN=http://localhost:5173
 
-SEQUENCE_AI_PROVIDER=ollama
-SEQUENCE_AI_BASE_URL=http://localhost:11434
-SEQUENCE_AI_MODEL=llama3.1:8b
-
-SEQUENCE_AI_USE_OPENAI=0
 SEQUENCE_AI_OPENAI_BASE_URL=https://api.openai.com/v1
 SEQUENCE_AI_OPENAI_MODEL=gpt-4o-mini
 OPENAI_API_KEY=
@@ -101,7 +96,7 @@ SEQUENCE_SOURCE_SEQUENCE_DIR=backend/sequence_rag/source_sequences
 
 - 루트 `package.json`은 최소 의존성만 가지고 있고, 실제 프론트 실행은 `frontend/`에서 진행합니다.
 - 시퀀스 추천은 규칙 기반 로직, 임베딩 검색, RAG 문맥, AI provider를 함께 사용합니다.
-- 현재 파인튜닝 관련 코드는 제거되어 있고, 운영 기준 흐름은 `Ollama` 또는 `OpenAI` 기반입니다.
+- 현재 파인튜닝 관련 코드는 제거되어 있습니다.
 
 ## Why This Repo Exists
 
