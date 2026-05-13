@@ -1,22 +1,34 @@
 from __future__ import annotations
 
-from backend.Sub.session_excel import get_or_create_sid, SessionState
-from typing import Dict, List, Optional, Any
-
 import json
+import os
 from uuid import uuid4
+from pathlib import Path
+from typing import Dict, List, Optional, Any
 
 from fastapi import FastAPI, HTTPException, Request, Response, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 
-from pathlib import Path
+from dotenv import load_dotenv
 
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+
+frontend_origins = {
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+}
+configured_frontend_origin = os.getenv("FRONTEND_ORIGIN")
+if configured_frontend_origin:
+    frontend_origins.add(configured_frontend_origin)
+
+from backend.Sub.session_excel import get_or_create_sid, SessionState
 from backend.Sub.bom_service import create_bom_run, DATA_DIR
 from backend.sub_router import sub_router
 from backend.Assembly_router import router as assembly_router
 from backend.Seuqence_router import router as seuquence_router 
+from backend.Lob_router import router as lob_router
 
 from backend.Sub.session_store import get_or_create_sid, refresh_session_state, save_session_state, SESSION_STATE
 
@@ -25,13 +37,14 @@ app = FastAPI()
 app.include_router(sub_router, prefix="/api")
 app.include_router(assembly_router, prefix="/api")
 app.include_router(seuquence_router, prefix="/api")
+app.include_router(lob_router, prefix="/api")
 
 templates = Jinja2Templates(directory="frontend/template")
 app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # 프론트 주소
+    allow_origins=sorted(frontend_origins),  # 프론트 주소
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -3,12 +3,28 @@ import { useSequenceDnD } from "./SequenceDnDContext";
 
 export default function SequencePalette({
   parts = [],
-  processes = [],
   loading = false,
   error = null,
+  usedPartNodeNames = [],
+  selectedPartNodeNames = [],
+  onTogglePartSelection,
+  onClearPartSelection,
+  onAutoBuildSequence,
+  autoBuildLoading = false,
+  useAiForAutoBuild = false,
+  onToggleUseAiForAutoBuild,
 }) {
   const [, setDragItem] = useSequenceDnD();
   const [collapsedGroups, setCollapsedGroups] = useState({});
+  const [showAiTooltip, setShowAiTooltip] = useState(false);
+  const usedPartNodeNameSet = useMemo(
+    () => new Set(usedPartNodeNames.filter(Boolean)),
+    [usedPartNodeNames]
+  );
+  const selectedPartNodeNameSet = useMemo(
+    () => new Set(selectedPartNodeNames.filter(Boolean)),
+    [selectedPartNodeNames]
+  );
 
   const onDragStart = (e, payload) => {
     setDragItem(payload);
@@ -67,6 +83,8 @@ export default function SequencePalette({
     const isMatched = Boolean(part.partBase);
     const hasChildren = item.children.length > 0;
     const isCollapsed = collapsedGroups[item.key] === true;
+    const isUsed = usedPartNodeNameSet.has(part.nodeName);
+    const isSelected = selectedPartNodeNameSet.has(part.nodeName);
 
     return (
       <div key={item.key} style={{ marginBottom: 6 }}>
@@ -96,6 +114,19 @@ export default function SequencePalette({
             {hasChildren ? (isCollapsed ? "▸" : "▾") : "•"}
           </button>
 
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={() => onTogglePartSelection?.(part)}
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              alignSelf: "center",
+              margin: 0,
+              cursor: "pointer",
+            }}
+            aria-label={`${displayLabel} 선택`}
+          />
+
           <div
             draggable
             onDragStart={(e) =>
@@ -104,6 +135,7 @@ export default function SequencePalette({
                 data: {
                   partId: part.partId,
                   partName: part.partName,
+                  nodeName: part.nodeName,
                   inhouse: part.inhouse,
                   partBase: part.partBase,
                   sourceSheet: part.sourceSheet,
@@ -118,7 +150,8 @@ export default function SequencePalette({
               borderRadius: 6,
               border: isMatched ? "1px solid #cbd5e1" : "1px dashed #fca5a5",
               cursor: "grab",
-              background: isMatched ? "#ffffff" : "#fef2f2",
+              background: isUsed ? "#e5e7eb" : isMatched ? "#ffffff" : "#fef2f2",
+              color: isUsed ? "#64748b" : "#0f172a",
               fontSize: 12,
               whiteSpace: "nowrap",
               overflow: "hidden",
@@ -170,9 +203,115 @@ export default function SequencePalette({
             fontWeight: 600,
             marginBottom: 8,
             fontSize: 13,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
           }}
         >
-          PART
+          <span>PART</span>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => onClearPartSelection?.()}
+              disabled={selectedPartNodeNames.length === 0}
+              style={{
+                border: "1px solid #cbd5e1",
+                borderRadius: 8,
+                background: selectedPartNodeNames.length === 0 ? "#f8fafc" : "#ffffff",
+                color: selectedPartNodeNames.length === 0 ? "#94a3b8" : "#334155",
+                padding: "6px 7px",
+                fontSize: 11,
+                fontWeight: 600,
+                lineHeight: 1,
+                whiteSpace: "nowrap",
+                cursor: selectedPartNodeNames.length === 0 ? "not-allowed" : "pointer",
+              }}
+            >
+              초기화
+            </button>
+            <div
+              style={{ position: "relative", display: "inline-flex" }}
+              onMouseEnter={() => setShowAiTooltip(true)}
+              onMouseLeave={() => setShowAiTooltip(false)}
+            >
+              <button
+                type="button"
+                onClick={() => onToggleUseAiForAutoBuild?.()}
+                style={{
+                  border: `1px solid ${useAiForAutoBuild ? "#2563eb" : "#cbd5e1"}`,
+                  borderRadius: 8,
+                  background: useAiForAutoBuild ? "#dbeafe" : "#ffffff",
+                  color: useAiForAutoBuild ? "#1d4ed8" : "#334155",
+                  padding: "6px 8px",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  lineHeight: 1,
+                  whiteSpace: "nowrap",
+                  cursor: "pointer",
+                }}
+                aria-describedby="sequence-ai-toggle-tooltip"
+              >
+                AI 사용
+              </button>
+              {showAiTooltip ? (
+                <div
+                  id="sequence-ai-toggle-tooltip"
+                  role="tooltip"
+                  style={{
+                    position: "absolute",
+                    top: "calc(100% + 8px)",
+                    left: "50%",
+                    transform: "translateX(-50%)",
+                    zIndex: 20,
+                    minWidth: 220,
+                    maxWidth: 260,
+                    padding: "8px 10px",
+                    borderRadius: 8,
+                    background: "#0f172a",
+                    color: "#f8fafc",
+                    fontSize: 11,
+                    lineHeight: 1.45,
+                    boxShadow: "0 10px 24px rgba(15, 23, 42, 0.22)",
+                    whiteSpace: "normal",
+                    textAlign: "left",
+                  }}
+                >
+                  자동 구성 시 AI가 DB 추천 결과를 추가로 검토합니다. 끄면 AI 없이 DB 기준으로만 자동 구성합니다.
+                </div>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              onClick={() => onAutoBuildSequence?.()}
+              disabled={autoBuildLoading || selectedPartNodeNames.length === 0}
+              style={{
+                border: 0,
+                borderRadius: 8,
+                background:
+                  autoBuildLoading || selectedPartNodeNames.length === 0
+                    ? "#cbd5e1"
+                    : "#2563eb",
+                color: "#fff",
+                padding: "6px 8px",
+                fontSize: 11,
+                fontWeight: 600,
+                lineHeight: 1,
+                whiteSpace: "nowrap",
+                cursor:
+                  autoBuildLoading || selectedPartNodeNames.length === 0
+                    ? "not-allowed"
+                    : "pointer",
+              }}
+            >
+              {autoBuildLoading ? "생성 중..." : "자동구성"}
+            </button>
+          </div>
         </div>
 
         {loading && (
@@ -222,55 +361,6 @@ export default function SequencePalette({
         )}
 
         {!loading && partTree.map((item) => renderPartNode(item))}
-      </div>
-
-      {/* ===============================
-          PROCESS 섹션
-         =============================== */}
-      <div>
-        <div
-          style={{
-            fontWeight: 600,
-            marginBottom: 8,
-            fontSize: 13,
-          }}
-        >
-          PROCESS
-        </div>
-
-        {processes.map((p) => (
-          <div
-            key={p.processKey}
-            draggable
-            onDragStart={(e) =>
-              onDragStart(e, {
-                nodeType: "PROCESS",
-                data: {
-                  processKey: p.processKey,
-                  processType: p.processType,
-                  label: p.label,          // 공정 표시명
-                  partBase: p.partBase,
-                  sourceSheet: p.sourceSheet,
-                },
-              })
-            }
-            style={{
-              padding: "6px 8px",
-              marginBottom: 6,
-              borderRadius: 6,
-              border: "1px solid #fed7aa",
-              cursor: "grab",
-              background: "#fff7ed",
-              fontSize: 12,
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-            }}
-            title={`${p.sourceSheet} / ${p.partBase}`}
-          >
-            {p.label}
-          </div>
-        ))}
       </div>
     </div>
   );

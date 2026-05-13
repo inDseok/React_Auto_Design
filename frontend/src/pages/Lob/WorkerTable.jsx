@@ -45,9 +45,16 @@ export function WorkerTable({
     (max, laborSum) => Math.max(max, laborSum),
     0
   );
-  const normalizedTotalEfficiency =
+  const lobPercent =
     maxWorkerLaborSum > 0 && workerStats.length > 0
       ? (totalLaborSum / (maxWorkerLaborSum * workerStats.length)) * 100
+      : 0;
+  const averageEfficiencyPercent =
+    workerStats.length > 0
+      ? workerStats.reduce((sum, worker) => {
+          const movementTime = movementTimes[worker.worker] ?? 0;
+          return sum + getWorkerEfficiencyPercent(worker, movementTime);
+        }, 0) / workerStats.length
       : 0;
 
   return (
@@ -102,7 +109,20 @@ export function WorkerTable({
                 background: "#f0f4f8",
               }}
             >
-              전체
+              전체 합계
+            </th>
+            <th
+              style={{
+                padding: "14px 16px",
+                textAlign: "center",
+                color: "#243b53",
+                borderBottom: "1px solid #d9e2ec",
+                whiteSpace: "nowrap",
+                background: "#f0f4f8",
+                width: 120,
+              }}
+            >
+              LOB
             </th>
           </tr>
         </thead>
@@ -177,9 +197,48 @@ export function WorkerTable({
                   : rowDef.total
                     ? formatTimeCell(grandTotals["공수 합계"])
                     : rowDef.ratio
-                      ? formatRatio(normalizedTotalEfficiency)
+                      ? formatRatio(averageEfficiencyPercent)
                       : formatTimeCell(grandTotals[rowDef.key] ?? 0)}
               </td>
+              {rowDef.key === "가치" ? (
+                <td
+                  rowSpan={6}
+                  style={{
+                    padding: "10px 12px",
+                    borderBottom: "1px solid #e5edf5",
+                    background: "#eef4ff",
+                    textAlign: "center",
+                    verticalAlign: "middle",
+                    width: 120,
+                  }}
+                >
+                  <div style={{ display: "grid", gap: 8, justifyItems: "center" }}>
+                    <div
+                      style={{
+                        padding: "4px 10px",
+                        borderRadius: 999,
+                        background: "#ffffff",
+                        color: "#1d4ed8",
+                        fontSize: 11,
+                        fontWeight: 800,
+                        letterSpacing: "0.08em",
+                      }}
+                    >
+                      LOB
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 22,
+                        lineHeight: 1,
+                        fontWeight: 800,
+                        color: "#1e3a8a",
+                      }}
+                    >
+                      {formatRatio(lobPercent)}
+                    </div>
+                  </div>
+                </td>
+              ) : null}
             </tr>
           ))}
         </tbody>

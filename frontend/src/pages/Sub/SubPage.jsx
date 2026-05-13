@@ -1,12 +1,15 @@
 import React, { useEffect, useMemo, useState, useRef } from "react";
 import { Link } from "react-router-dom";
 import { useApp } from "../../state/AppContext";
-import { apiGet, apiPatch, apiPost } from "../../api/client";
+import { apiDelete, apiGet, apiPatch, apiPost } from "../../api/client";
 import TreeView from "./TreeView";
 import SelectedPartPanel from "./SelectedPartPanel";
 import SpecSelector from "./SpecSelector";
 import UploadBom from "./UploadBom";
-import { Button, Spin, Alert, Card, Row, Col, Space } from "antd";
+import { Button, Spin, Alert, Card, Row, Col, Space, message } from "antd";
+import { getDisplaySpecName } from "../Sequence/sequenceEditorUtils";
+import { showPopup } from "../../template/popupUtils";
+import ConfirmPopup from "../../template/ConfirmPopup";
 
 /* =========================
    utils
@@ -58,6 +61,9 @@ function makeTreeCacheKey(bomId, spec) {
   return `${bomId}::${spec}`;
 }
 
+function cloneNodesSnapshot(nodes) {
+  return JSON.parse(JSON.stringify(Array.isArray(nodes) ? nodes : []));
+}
 
 
 /* =========================
@@ -67,10 +73,14 @@ function makeTreeCacheKey(bomId, spec) {
 export default function SubPage() {
   const { state, actions } = useApp();
   const hasLoadedRef = useRef(false);
+  const treeScrollRef = useRef(null);
   const [nodes, setNodes] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [showConfirmInit, setShowConfirmInit] = useState(false);
   const [err, setErr] = useState("");
   const [dragNodeId, setDragNodeId] = useState(null);
+  const undoStackRef = useRef([]);
+  const isUndoingRef = useRef(false);
 
   // ⛳ bomId lock
   const fixedBomIdRef = useRef(null);
@@ -78,6 +88,11 @@ export default function SubPage() {
   useEffect(() => {
     actions.setSelectedNode(null);
   }, [state.selectedSpec]);
+
+  useEffect(() => {
+    undoStackRef.current = [];
+    isUndoingRef.current = false;
+  }, [state.bomId, state.selectedSpec]);
   
   // bomId 고정 / 교체 로직
   useEffect(() => {
@@ -119,6 +134,52 @@ export default function SubPage() {
     }
   }
 
+  function handleTreeDragAutoScroll(event) {
+    if (!dragNodeId) {
+      return;
+    }
+
+    const container = treeScrollRef.current;
+    if (!container) {
+      return;
+    }
+
+    const rect = container.getBoundingClientRect();
+    const threshold = 72;
+    const maxStep = 22;
+    const pointerY = event.clientY;
+    let nextScrollDelta = 0;
+
+    if (pointerY < rect.top + threshold) {
+      const intensity = (rect.top + threshold - pointerY) / threshold;
+      nextScrollDelta = -Math.ceil(maxStep * Math.min(1, intensity));
+    } else if (pointerY > rect.bottom - threshold) {
+      const intensity = (pointerY - (rect.bottom - threshold)) / threshold;
+      nextScrollDelta = Math.ceil(maxStep * Math.min(1, intensity));
+    }
+
+    if (nextScrollDelta !== 0) {
+      container.scrollTop += nextScrollDelta;
+    }
+  }
+
+  function beginUndoCheckpoint() {
+    const snapshot = cloneNodesSnapshot(nodes);
+    undoStackRef.current.push(snapshot);
+    if (undoStackRef.current.length > 30) {
+      undoStackRef.current = undoStackRef.current.slice(-30);
+    }
+
+    return () => {
+      const stack = undoStackRef.current;
+      if (stack[stack.length - 1] === snapshot) {
+        stack.pop();
+      } else {
+        undoStackRef.current = stack.filter((entry) => entry !== snapshot);
+      }
+    };
+  }
+
   useEffect(() => {
     if (!state.bomId || !state.selectedSpec) {
       setNodes(null);
@@ -141,18 +202,9 @@ export default function SubPage() {
       setErr("");
   
       try {
-        const res = await fetch(
-          `http://localhost:8000/api/sub/bom/${state.bomId}/tree?spec=${encodeURIComponent(
-            state.selectedSpec
-          )}`,
-          { credentials: "include" }
+        const data = await apiGet(
+          `/api/sub/bom/${state.bomId}/tree?spec=${encodeURIComponent(state.selectedSpec)}`
         );
-  
-        if (!res.ok) {
-          throw new Error(await res.text());
-        }
-  
-        const data = await res.json();
   
         // 🔥 요청 ID가 최신 요청이 아닐 경우 — 응답 버리기
         if (myReqId !== reqIdRef.current) return;
@@ -183,6 +235,111 @@ export default function SubPage() {
   
 
   const treeRoots = useMemo(() => buildTree(nodes), [nodes]);
+  const selectedSpecLabel = getDisplaySpecName(state.selectedSpec);
+
+  async function handleDeleteSelectedNode() {
+    if (!state.bomId || !state.selectedSpec || !selectedNode) {
+      return;
+    }
+
+    const rollbackUndo = beginUndoCheckpoint();
+
+    try {
+      const deletedTree = await apiDelete(
+        `/api/sub/bom/${encodeURIComponent(
+          state.bomId
+        )}/node/${encodeURIComponent(selectedNode.name)}?spec=${encodeURIComponent(
+          state.selectedSpec
+        )}`
+      );
+
+      if (deletedTree?.nodes) {
+        updateNodesAndCache(deletedTree.nodes);
+      }
+
+      actions.setSelectedNode(null);
+    } catch (e) {
+      rollbackUndo?.();
+      throw e;
+    }
+  }
+
+  useEffect(() => {
+    async function handleUndoShortcut(event) {
+      const target = event.target;
+      const tagName = String(target?.tagName || "").toLowerCase();
+      const isTypingTarget =
+        target?.isContentEditable ||
+        tagName === "input" ||
+        tagName === "textarea" ||
+        tagName === "select";
+
+      if (isTypingTarget || isUndoingRef.current) {
+        return;
+      }
+
+      const isUndoKey =
+        (event.ctrlKey || event.metaKey) &&
+        event.key.toLowerCase() === "z" &&
+        !event.shiftKey;
+
+      if (isUndoKey) {
+        if (!state.bomId || !state.selectedSpec || undoStackRef.current.length === 0) {
+          return;
+        }
+
+        event.preventDefault();
+
+        const snapshot = undoStackRef.current.pop();
+        if (!snapshot) {
+          return;
+        }
+
+        isUndoingRef.current = true;
+
+        try {
+          const restoredTree = await apiPost(
+            `/api/sub/bom/${encodeURIComponent(state.bomId)}/tree/restore?spec=${encodeURIComponent(
+              state.selectedSpec
+            )}`,
+            { nodes: snapshot }
+          );
+
+          const restoredNodes = restoredTree?.nodes ?? [];
+          updateNodesAndCache(restoredNodes);
+          setDragNodeId(null);
+
+          if (state.selectedNodeId) {
+            const stillExists = restoredNodes.some((item) => item.name === state.selectedNodeId);
+            if (!stillExists) {
+              actions.setSelectedNode(null);
+            }
+          }
+        } catch (e) {
+          undoStackRef.current.push(snapshot);
+          message.error(String(e?.message ?? e));
+        } finally {
+          isUndoingRef.current = false;
+        }
+        return;
+      }
+
+      if (event.key !== "Delete" || !selectedNode) {
+        return;
+      }
+
+      event.preventDefault();
+
+      try {
+        await handleDeleteSelectedNode();
+      } catch (e) {
+        message.error(String(e?.message ?? e));
+      }
+    }
+
+    window.addEventListener("keydown", handleUndoShortcut);
+    return () => window.removeEventListener("keydown", handleUndoShortcut);
+  }, [actions, selectedNode, state.bomId, state.selectedNodeId, state.selectedSpec]);
 
   // Drag 시작 핸들러
   function handleDragStartNode(nodeId) {
@@ -193,6 +350,8 @@ export default function SubPage() {
   async function handleDropNode(parentId, index) {
     if (!dragNodeId) return;
     if (!state.bomId || !state.selectedSpec) return;
+
+    const rollbackUndo = beginUndoCheckpoint();
 
     try {
       const payload = {
@@ -213,17 +372,20 @@ export default function SubPage() {
         updateNodesAndCache(updatedTree.nodes);
       }
     } catch (e) {
+      rollbackUndo();
       console.error("노드 이동 실패:", e);
-      alert("노드 이동 실패. 콘솔을 확인하세요.");
+      showPopup("노드 이동 실패. 콘솔을 확인하세요.", "error");
     } finally {
       setDragNodeId(null);
     }
   }
   async function handleAddRootNode() {
     if (!state?.bomId || !state?.selectedSpec) {
-      alert("BOM과 사양을 먼저 선택하세요.");
+      showPopup("BOM과 사양을 먼저 선택하세요.", "warning");
       return;
     }
+ 
+    const rollbackUndo = beginUndoCheckpoint();
   
     try {
       const roots = nodes?.filter(n => n.parent_name === null) ?? [];
@@ -262,7 +424,8 @@ export default function SubPage() {
       });
   
     } catch (e) {
-      alert("노드 추가 실패: " + String(e?.message ?? e));
+      rollbackUndo();
+      showPopup("노드 추가 실패: " + String(e?.message ?? e), "error");
     }
   }
   
@@ -291,14 +454,7 @@ export default function SubPage() {
 
       <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
       <Space style={{ marginBottom: 8, flexWrap: "wrap" }}>
-          <button
-            onClick={() => {
-              fixedBomIdRef.current = null;
-              hasLoadedRef.current = false;
-              setNodes(null);
-              actions.resetAll();
-            }}
-          >
+          <button onClick={() => setShowConfirmInit(true)}>
             전체 초기화
           </button>
 
@@ -311,7 +467,7 @@ export default function SubPage() {
       {!state.selectedSpec && (
         <Alert
           type="info"
-          message="사양을 선택하세요."
+          title="사양을 선택하세요."
           showIcon
         />
       )}
@@ -338,34 +494,41 @@ export default function SubPage() {
         >
           {/* 트리 패널 - 여기서만 스크롤 */}
           <div
+            ref={treeScrollRef}
             style={{
               flex: 1,
               minHeight: 0,
               overflowY: "auto",
-              border: "1px solid #ddd",
-              borderRadius: 8,
-              padding: 8,
+              position: "relative",
+              border: "1px solid #dbe4f0",
+              borderRadius: 20,
+              padding: 14,
+              background:
+                "linear-gradient(180deg, #fcfdff 0%, #f8fafc 100%)",
+              boxShadow: "0 20px 42px rgba(15, 23, 42, 0.07)",
             }}
+            onDragOver={handleTreeDragAutoScroll}
           >
             <Spin spinning={loading} tip="트리 불러오는 중...">
               {treeRoots.length > 0 && (
                 <>
-                {state.selectedSpec && (
+                {selectedSpecLabel && (
                     <div
                       style={{
                         position: "absolute",
-                        top: 8,
-                        right: 8,
-                        background: "#ffffff",
-                        border: "1px solid #e5e7eb",
-                        borderRadius: 8,
-                        padding: "6px 10px",
-                        fontWeight: 600,
-                        boxShadow: "0 2px 6px rgba(0,0,0,0.05)",
+                        top: 14,
+                        right: 14,
+                        background: "rgba(255, 255, 255, 0.92)",
+                        border: "1px solid #dbe4f0",
+                        borderRadius: 999,
+                        padding: "7px 12px",
+                        fontWeight: 700,
+                        color: "#334155",
+                        boxShadow: "0 10px 24px rgba(15, 23, 42, 0.08)",
                         zIndex: 10
                       }}
                     >
-                      현재 사양: {state.selectedSpec}
+                      현재 사양: {selectedSpecLabel}
                     </div>
                   )}
                   <TreeView
@@ -385,9 +548,26 @@ export default function SubPage() {
             <SelectedPartPanel
               node={selectedNode}
               onUpdateNodes={updateNodesAndCache}
+              onBeforeMutate={beginUndoCheckpoint}
             />
           </div>
         </div>
+      )}
+
+      {showConfirmInit && (
+        <ConfirmPopup
+          message="전체 초기화하시겠습니까? BOM 및 모든 작업 내용이 초기화됩니다."
+          confirmLabel="초기화"
+          danger
+          onConfirm={() => {
+            fixedBomIdRef.current = null;
+            hasLoadedRef.current = false;
+            setNodes(null);
+            actions.resetAll();
+            setShowConfirmInit(false);
+          }}
+          onCancel={() => setShowConfirmInit(false)}
+        />
       )}
     </div>
   );

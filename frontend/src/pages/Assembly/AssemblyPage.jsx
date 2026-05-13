@@ -11,9 +11,22 @@ import {
   deleteOptionGroup,
 } from "./rowActions";
 import { useApp } from "../../state/AppContext";
+import SavedPopup from "../../template/SavedPopup";
+import ConfirmPopup from "../../template/ConfirmPopup";
+import { showPopup } from "../../template/popupUtils";
 import { useSearchParams } from "react-router-dom";
+import {
+  createSequenceWorkspaceContext,
+  removeSequenceDraft,
+} from "../Sequence/sequenceEditorUtils";
 
 const API_BASE = "http://localhost:8000/api/assembly";
+const ASSEMBLY_DRAFT_STORAGE_PREFIX = "assembly_page_draft_v1";
+
+function getAssemblyDraftStorageKey(bomId, spec) {
+  if (!bomId || !spec) return null;
+  return `${ASSEMBLY_DRAFT_STORAGE_PREFIX}:${bomId}:${spec}`;
+}
 
 function formatDecimalCell(value) {
   if (value === "" || value === null || value === undefined) return "";
@@ -25,9 +38,53 @@ function formatDecimalCell(value) {
 function normalizeAssemblyRow(row) {
   return {
     ...row,
+    id: row.id || crypto.randomUUID(),
     "SEC": formatDecimalCell(row["SEC"]),
     "TOTAL": formatDecimalCell(row["TOTAL"]),
   };
+}
+
+// 그룹 자체를 작업자 번호 순으로 정렬하고, 그룹 내 행도 작업자 번호 순으로 정렬
+function sortRowsByWorkerWithinGroups(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return rows;
+
+  const groupOrder = [];
+  const seen = new Set();
+  const rowsByGroup = {};
+
+  for (const row of rows) {
+    const key = row.__groupKey ?? "__ungrouped__";
+    if (!seen.has(key)) {
+      seen.add(key);
+      groupOrder.push(key);
+      rowsByGroup[key] = [];
+    }
+    rowsByGroup[key].push(row);
+  }
+
+  const workerSortKey = (w) => {
+    const n = Number(String(w ?? ""));
+    return Number.isFinite(n) ? n : Infinity;
+  };
+
+  // 그룹 내 행 정렬
+  for (const key of groupOrder) {
+    rowsByGroup[key].sort((a, b) => {
+      const ka = workerSortKey(a["작업자"]);
+      const kb = workerSortKey(b["작업자"]);
+      if (ka !== kb) return ka - kb;
+      return String(a["작업자"] ?? "").localeCompare(String(b["작업자"] ?? ""), "ko");
+    });
+  }
+
+  // 그룹 자체를 각 그룹의 최소 작업자 번호 기준으로 정렬
+  groupOrder.sort((keyA, keyB) => {
+    const minA = Math.min(...rowsByGroup[keyA].map((r) => workerSortKey(r["작업자"])));
+    const minB = Math.min(...rowsByGroup[keyB].map((r) => workerSortKey(r["작업자"])));
+    return minA - minB;
+  });
+
+  return groupOrder.flatMap((key) => rowsByGroup[key]);
 }
 
 function createSerializableRows(rows = []) {
@@ -42,6 +99,12 @@ function createSerializableRows(rows = []) {
 
 function getRowsSnapshot(rows = []) {
   return JSON.stringify(createSerializableRows(rows));
+}
+
+function removeAssemblyDraft(bomId, spec) {
+  const storageKey = getAssemblyDraftStorageKey(bomId, spec);
+  if (!storageKey) return;
+  localStorage.removeItem(storageKey);
 }
 
 function toNumber(value) {
@@ -76,6 +139,7 @@ function buildWorkerRecommendation(rows, workerCount) {
       bundles: [],
       workers: [],
       assignmentByRowId: {},
+      assignmentByRowIndex: {},
       totalTime: 0,
     };
   }
@@ -108,13 +172,17 @@ function buildWorkerRecommendation(rows, workerCount) {
         groupLabel,
         partLabel,
         rowIds: [],
+        rowIndexes: [],
         totalTime: 0,
         rowCount: 0,
       };
       bundles.push(currentBundle);
     }
 
-    currentBundle.rowIds.push(rows[index].id);
+    if (rows[index].id) {
+      currentBundle.rowIds.push(rows[index].id);
+    }
+    currentBundle.rowIndexes.push(index);
     currentBundle.rowCount += 1;
     currentBundle.totalTime += totalTime;
   });
@@ -126,6 +194,7 @@ function buildWorkerRecommendation(rows, workerCount) {
   }));
 
   const assignmentByRowId = {};
+  const assignmentByRowIndex = {};
   const bundleCount = bundles.length;
   const partitionCount = Math.min(workerCount, Math.max(1, bundleCount));
 
@@ -208,6 +277,9 @@ function buildWorkerRecommendation(rows, workerCount) {
         bundle.rowIds.forEach((rowId) => {
           assignmentByRowId[rowId] = targetWorker.worker;
         });
+        bundle.rowIndexes.forEach((rowIndex) => {
+          assignmentByRowIndex[rowIndex] = targetWorker.worker;
+        });
       });
     });
   }
@@ -218,6 +290,7 @@ function buildWorkerRecommendation(rows, workerCount) {
     bundles,
     workers,
     assignmentByRowId,
+    assignmentByRowIndex,
     totalTime: bundles.reduce((sum, bundle) => sum + bundle.totalTime, 0),
   };
 }
@@ -235,6 +308,8 @@ function AssemblyPage() {
   const [selectedOption, setSelectedOption] = useState("");
   const [selectedInsertPosition, setSelectedInsertPosition] = useState("end");
   const [rows, setRows] = useState([]);
+  const [showSavedPopup, setShowSavedPopup] = useState(false);
+  const [showConfirmReset, setShowConfirmReset] = useState(false);
   const [isRecommendOpen, setIsRecommendOpen] = useState(false);
   const [recommendWorkerCount, setRecommendWorkerCount] = useState("1");
 
@@ -251,7 +326,7 @@ function AssemblyPage() {
     runAutoMatch,
   } = useAssemblyData();
   
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const bomId = params.get("bomId");
   const spec = params.get("spec");
 
@@ -267,20 +342,33 @@ function AssemblyPage() {
     [recommendWorkerCountNumber, rows]
   );
 
+  useEffect(() => {
+    if (bomId && spec) {
+      return;
+    }
+
+    const workspaceContext = createSequenceWorkspaceContext();
+    const nextBomId = bomId || workspaceContext.bomId;
+    const nextParams = new URLSearchParams(params);
+    nextParams.set("bomId", nextBomId);
+    nextParams.set("spec", spec || `manual-sequence-${nextBomId}`);
+    setParams(nextParams, { replace: true });
+  }, [bomId, params, setParams, spec]);
+
   const restoreSavedRows = async ({ silent = false } = {}) => {
     if (!bomId || !spec) {
       if (!silent) {
-        alert("BOM 또는 사양 정보가 없습니다.");
+        showPopup("BOM 또는 사양 정보가 없습니다.", "warning");
       }
-      return;
+      return false;
     }
 
     const saved = await loadSavedRows(bomId, spec);
     if (!saved.length) {
       if (!silent) {
-        alert("저장된 assembly.json 데이터가 없습니다.");
+        showPopup("저장된 assembly.json 데이터가 없습니다.", "warning");
       }
-      return;
+      return false;
     }
 
     const restored = saved.map((row) => normalizeAssemblyRow({
@@ -291,8 +379,48 @@ function AssemblyPage() {
       __isNew: false,
     }));
 
-    setRows(restored);
-    lastSavedRowsSnapshotRef.current = getRowsSnapshot(restored);
+    const sortedRestored = sortRowsByWorkerWithinGroups(restored);
+    setRows(sortedRestored);
+    const restoredSnapshot = getRowsSnapshot(sortedRestored);
+    lastSavedRowsSnapshotRef.current = restoredSnapshot;
+    if (!silent) showPopup("불러오기 완료", "success");
+    return true;
+  };
+
+  const loadRowsFromSequence = async ({ showEmptyAlert = false } = {}) => {
+    if (!bomId || !spec) {
+      return false;
+    }
+
+    const added = await runAutoMatch(bomId, spec);
+    if (!added.length) {
+      setRows([]);
+      removeAssemblyDraft(bomId, spec);
+
+      if (showEmptyAlert) {
+        showPopup("시퀀스 JSON에서 자동 추가할 항목이 없습니다.", "warning");
+      }
+      return false;
+    }
+
+    const autoRows = added.map((row) =>
+      normalizeAssemblyRow({
+        id: crypto.randomUUID(),
+        ...row,
+        __groupKey: row.__groupKey || row["부품 기준"],
+        __groupLabel: row.__groupLabel || row.__sequenceGroupLabel || "",
+        __sourceSheet: row.__sourceSheet || row.sourceSheet || "",
+        __isNew: false,
+      })
+    );
+
+    setRows(sortRowsByWorkerWithinGroups(autoRows));
+    setSelectedSheet("");
+    setSelectedPart("");
+    setSelectedOption("");
+    setSelectedInsertPosition("end");
+    removeAssemblyDraft(bomId, spec);
+    return true;
   };
 
   useEffect(() => {
@@ -300,33 +428,46 @@ function AssemblyPage() {
     if (spec) actions.setSpec(spec);
   }, [bomId, spec]);
 
-  // 초기 로딩
+  // 초기 로딩: assembly / sequence 버전 비교 후 최신 데이터 복원
   useEffect(() => {
-  
     const init = async () => {
       try {
         loadSheets();
-  
-        const sessionRes = await fetch(`${API_BASE}/session-info`, {
-          credentials: "include",
-        });
-  
-        if (sessionRes.ok) {
-          const session = await sessionRes.json();
-  
-          if (session.ok) {
-            await restoreSavedRows({ silent: true });
+
+        let useSequence = false;
+        if (bomId && spec) {
+          try {
+            const res = await fetch(
+              `${API_BASE}/bom/${encodeURIComponent(bomId)}/spec/${encodeURIComponent(spec)}/version-info`,
+              { credentials: "include" }
+            );
+            if (res.ok) {
+              const { assemblyVersion, sequenceVersion, hasAssembly, hasSequence } = await res.json();
+              // 시퀀스가 assembly보다 나중에 저장됐으면 시퀀스 기준으로 재구성
+              if (hasSequence && (!hasAssembly || sequenceVersion > assemblyVersion)) {
+                useSequence = true;
+              }
+            }
+          } catch {
+            // 버전 정보 조회 실패 시 assembly 우선
+          }
+        }
+
+        if (useSequence) {
+          await loadRowsFromSequence({ showEmptyAlert: false });
+        } else {
+          const hasRestored = await restoreSavedRows({ silent: true });
+          if (!hasRestored) {
+            await loadRowsFromSequence({ showEmptyAlert: false });
           }
         }
       } catch (e) {
         console.error(e);
       }
     };
-  
+
     init();
   }, [bomId, spec]);
-  
-  
 
   // 시트 변경 → part 로딩
   useEffect(() => {
@@ -355,7 +496,7 @@ function AssemblyPage() {
   // DB에서 tasks 추가
   const handleAddFromDB = async () => {
     if (!selectedSheet || !selectedPart || !selectedOption) {
-      alert("시트, 부품 기준, OPTION을 모두 선택하세요.");
+      showPopup("시트, 부품 기준, OPTION을 모두 선택하세요.", "warning");
       return;
     }
 
@@ -366,7 +507,7 @@ function AssemblyPage() {
     );
 
     if (tasks.length === 0) {
-      alert("해당 조건에 맞는 작업이 없습니다.");
+      showPopup("해당 조건에 맞는 작업이 없습니다.", "warning");
       return;
     }
 
@@ -442,6 +583,10 @@ function AssemblyPage() {
       const target = prev.find((r) => r.id === rowId);
       if (!target) return prev;
 
+      const normalizedValue =
+        field === "OPTION" || field === "요소작업" || field === "부품 기준"
+          ? String(value ?? "").replace(/\r?\n/g, " ").trim()
+          : value;
       const targetInstanceKey =
         target.__partInstanceKey ||
         `${target.__groupKey || ""}::${target["부품 기준"] || ""}::${target["OPTION"] || ""}`;
@@ -449,8 +594,8 @@ function AssemblyPage() {
       // 작업자 컬럼: 값 입력일 때만 그룹 전파
       if (
         field === "작업자" &&
-        value !== "" &&               // 비어있지 않고
-        value !== target[field]      // 실제로 바뀌었고
+        normalizedValue !== "" &&               // 비어있지 않고
+        normalizedValue !== target[field]      // 실제로 바뀌었고
       ) {
         return prev.map((r) => {
           const rowInstanceKey =
@@ -458,14 +603,81 @@ function AssemblyPage() {
             `${r.__groupKey || ""}::${r["부품 기준"] || ""}::${r["OPTION"] || ""}`;
 
           if (rowInstanceKey === targetInstanceKey) {
-            return { ...r, 작업자: value };
+            return { ...r, 작업자: normalizedValue };
           }
           return r;
         });
       }
+
+      // OPTION 컬럼: 병합된 묶음 전체에 같은 값 반영
+      if (field === "OPTION" && normalizedValue !== target[field]) {
+        const targetPartBase = String(target["부품 기준"] ?? "").trim();
+        const targetOption = String(target["OPTION"] ?? "").trim();
+
+        return prev.map((r) => {
+          const rowInstanceKey =
+            r.__partInstanceKey ||
+            `${r.__groupKey || ""}::${r["부품 기준"] || ""}::${r["OPTION"] || ""}`;
+
+          const sameMergedOptionBlock =
+            rowInstanceKey === targetInstanceKey &&
+            String(r["부품 기준"] ?? "").trim() === targetPartBase &&
+            String(r["OPTION"] ?? "").trim() === targetOption;
+
+          if (!sameMergedOptionBlock) {
+            return r;
+          }
+
+          return { ...r, OPTION: normalizedValue };
+        });
+      }
+
+      // 요소작업 컬럼: 병합된 묶음 전체에 같은 값 반영
+      if (field === "요소작업" && normalizedValue !== target[field]) {
+        const targetPartBase = String(target["부품 기준"] ?? "").trim();
+        const targetTask = String(target["요소작업"] ?? "").trim();
+
+        return prev.map((r) => {
+          const rowInstanceKey =
+            r.__partInstanceKey ||
+            `${r.__groupKey || ""}::${r["부품 기준"] || ""}::${r["OPTION"] || ""}`;
+
+          const sameMergedTaskBlock =
+            rowInstanceKey === targetInstanceKey &&
+            String(r["부품 기준"] ?? "").trim() === targetPartBase &&
+            String(r["요소작업"] ?? "").trim() === targetTask;
+
+          if (!sameMergedTaskBlock) {
+            return r;
+          }
+
+          return { ...r, "요소작업": normalizedValue };
+        });
+      }
+
+      // 부품 기준 컬럼: 병합된 묶음 전체에 같은 값 반영
+      if (field === "부품 기준" && normalizedValue !== target[field]) {
+        const targetPartBase = String(target["부품 기준"] ?? "").trim();
+
+        return prev.map((r) => {
+          const rowInstanceKey =
+            r.__partInstanceKey ||
+            `${r.__groupKey || ""}::${r["부품 기준"] || ""}::${r["OPTION"] || ""}`;
+
+          const sameMergedPartBlock =
+            rowInstanceKey === targetInstanceKey &&
+            String(r["부품 기준"] ?? "").trim() === targetPartBase;
+
+          if (!sameMergedPartBlock) {
+            return r;
+          }
+
+          return { ...r, "부품 기준": normalizedValue };
+        });
+      }
   
       // 기본: 개별 셀만 변경
-      return updateCell(prev, rowId, field, value);
+      return updateCell(prev, rowId, field, normalizedValue);
     });
   };
   
@@ -475,15 +687,18 @@ function AssemblyPage() {
   // 저장
   const handleSave = async () => {
     if (!rows.length) {
-      alert("저장할 조립 총공수 데이터가 없습니다.");
+      showPopup("저장할 조립 총공수 데이터가 없습니다.", "warning");
       return false;
     }
 
     const ok = await saveRowsToDB(bomId, spec, rows);
     if (ok) {
-      lastSavedRowsSnapshotRef.current = getRowsSnapshot(rows);
-      alert("저장 완료");
-    } else alert("저장 실패");
+      removeSequenceDraft(bomId, spec);
+      removeAssemblyDraft(bomId, spec);
+      const savedSnapshot = getRowsSnapshot(rows);
+      lastSavedRowsSnapshotRef.current = savedSnapshot;
+      setShowSavedPopup(true);
+    } else showPopup("저장 실패", "error");
     return ok;
   };
 
@@ -492,7 +707,10 @@ function AssemblyPage() {
       const ok = rows.length ? await saveRowsToDB(bomId, spec, rows) : true;
 
       if (ok) {
-        lastSavedRowsSnapshotRef.current = getRowsSnapshot(rows);
+        removeSequenceDraft(bomId, spec);
+        removeAssemblyDraft(bomId, spec);
+        const savedSnapshot = getRowsSnapshot(rows);
+        lastSavedRowsSnapshotRef.current = savedSnapshot;
       }
 
       event.detail?.respond?.(ok);
@@ -516,30 +734,9 @@ function AssemblyPage() {
     };
   }, [rows]);
 
-  const handleAutoMatch = async () => {
-    const added = await runAutoMatch(bomId, spec);
-  
-    if (added.length === 0) {
-      alert("자동 추가된 항목이 없습니다.");
-      return;
-    }
-    
-
-      const autoRows = added.map((row) => normalizeAssemblyRow({
-        id: crypto.randomUUID(),
-        ...row,
-        __groupKey: row.__groupKey || row["부품 기준"],
-        __groupLabel: row.__groupLabel || row.__sequenceGroupLabel || "",
-        __sourceSheet: row.__sourceSheet || row.sourceSheet || "",
-        __isNew: false,
-      }));
-  
-    setRows(autoRows);
-  };
-
   const handleOpenRecommend = () => {
     if (!rows.length) {
-      alert("작업자 추천을 하려면 조립 총공수 데이터가 있어야 합니다.");
+      showPopup("작업자 추천을 하려면 조립 총공수 데이터가 있어야 합니다.", "warning");
       return;
     }
 
@@ -552,24 +749,46 @@ function AssemblyPage() {
     setIsRecommendOpen(true);
   };
 
-  const handleApplyRecommendation = () => {
+  const handleApplyRecommendation = async () => {
     const assignmentByRowId = workerRecommendation.assignmentByRowId || {};
-    setRows((prev) =>
-      prev.map((row) =>
-        assignmentByRowId[row.id]
-          ? { ...row, 작업자: assignmentByRowId[row.id] }
+    const assignmentByRowIndex = workerRecommendation.assignmentByRowIndex || {};
+    const nextRows = rows.map((row, index) => {
+      const assignedWorker =
+        (row.id ? assignmentByRowId[row.id] : null) || assignmentByRowIndex[index];
+      return assignedWorker
+          ? { ...row, 작업자: assignedWorker }
           : row
-      )
-    );
+    });
+
+    setRows(nextRows);
     setIsRecommendOpen(false);
+
+    if (!bomId || !spec) {
+      showPopup("작업자 추천은 적용됐지만 BOM 또는 사양 정보가 없어 저장하지 못했습니다.", "error");
+      return;
+    }
+
+    const ok = await saveRowsToDB(bomId, spec, nextRows);
+    if (ok) {
+      removeSequenceDraft(bomId, spec);
+      removeAssemblyDraft(bomId, spec);
+      const savedSnapshot = getRowsSnapshot(nextRows);
+      lastSavedRowsSnapshotRef.current = savedSnapshot;
+      return;
+    }
+
+    showPopup("작업자 추천은 화면에 적용됐지만 저장에 실패했습니다.", "error");
   };
   
-  const handleReset = () => {
+  const handleReset = () => setShowConfirmReset(true);
+
+  const doReset = () => {
     setSelectedSheet("");
     setSelectedPart("");
     setSelectedOption("");
     setSelectedInsertPosition("end");
     setRows([]);
+    setShowConfirmReset(false);
   };
   
   const handleDeleteOptionGroup = (partKey, optionValue) => {
@@ -642,7 +861,6 @@ function AssemblyPage() {
         onAdd={handleAddFromDB}
         onLoad={restoreSavedRows}
         onSave={handleSave}
-        onAutoMatch={handleAutoMatch}
         onRecommendWorkers={handleOpenRecommend}
         onReset={handleReset}
         canSave={rows.length > 0}
@@ -798,6 +1016,18 @@ function AssemblyPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {showSavedPopup && <SavedPopup onClose={() => setShowSavedPopup(false)} />}
+
+      {showConfirmReset && (
+        <ConfirmPopup
+          message="초기화하시겠습니까? 현재 작업 내용이 모두 삭제됩니다."
+          confirmLabel="초기화"
+          danger
+          onConfirm={doReset}
+          onCancel={() => setShowConfirmReset(false)}
+        />
       )}
 
     </div>

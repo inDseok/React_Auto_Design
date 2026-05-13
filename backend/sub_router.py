@@ -7,7 +7,7 @@ import json
 import io
 from uuid import uuid4
 
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
@@ -15,26 +15,43 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from pathlib import Path
 
-from backend.models import SubNodePatch, SubTree, MoveNodeRequest, SubNode, NodeType
+from backend.models import SubNodePatch, SubTree, SubTreeRestoreRequest, MoveNodeRequest, SubNode, NodeType, TreeMeta
 from backend.Sub.bom_service import create_bom_run
 from backend.Sub.utills import load_tree_json, save_tree_json, read_bom_meta, read_spec_meta
 from backend.Sub.excel_loader import build_tree_from_sheet
 from typing import Optional
 from openpyxl import load_workbook
+from openpyxl.styles import Alignment, Font
 from backend.Sub.session_store import get_or_create_sid, refresh_session_state, save_session_state, SESSION_STATE
 
 from backend.Sub.json_to_excel import export_tree_excel_from_json, 결과파일_초기화, build_tree_workbook_from_json
 from backend.Assembly.json_to_excel import append_assembly_sheet_to_workbook
+from backend.Lob_router import (
+    append_equipment_lob_sheet_to_workbook,
+    append_process_design_sheet_to_workbook,
+    append_tact_time_sheet_to_workbook,
+    append_worker_lob_sheet_to_workbook,
+)
 from pathlib import Path
 from backend.Assembly.auto_match import load_db_rows, normalize_text, rf_score, jw_score
+from pydantic import BaseModel
 
 sub_router = APIRouter(prefix="/sub", tags=["SUB API"])
+
+
+class ExcelBundleExportRequest(BaseModel):
+    spec: Optional[str] = None
+    tactTime: Optional[float] = None
+    annualVehicleTarget: Optional[float] = None
+    tactInputs: Optional[Dict[str, Any]] = None
+    equipmentRows: Optional[List[Dict[str, Any]]] = None
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]   # backend
 DATA_DIR = BASE_DIR / "backend" /"data"
 SESSION_STORE_PATH = DATA_DIR / "session_state.json"
 ASSEMBLY_DB_PATH = BASE_DIR / "backend" / "작업시간분석표DB.xlsx"
+MANUAL_SEQUENCE_SPEC_PREFIX = "manual-sequence-"
 
 
 @lru_cache(maxsize=4)
@@ -92,6 +109,36 @@ def _get_part_suggestions(query_values: List[str], limit: int = 5) -> List[Dict[
 
     return ranked[:limit]
 
+
+def _is_manual_sequence_spec(spec: Optional[str]) -> bool:
+    return str(spec or "").startswith(MANUAL_SEQUENCE_SPEC_PREFIX)
+
+
+def _manual_sequence_spec_for_bom(bom_id: str) -> str:
+    return f"{MANUAL_SEQUENCE_SPEC_PREFIX}{bom_id}"
+
+
+def _build_empty_manual_tree(bom_id: str, spec: str) -> SubTree:
+    return SubTree(
+        meta=TreeMeta(
+            bom_id=bom_id,
+            spec_name=spec,
+            bom_filename="manual-sequence",
+        ),
+        nodes=[],
+    )
+
+
+def _load_or_create_tree(root_dir: Path, bom_id: str, spec: str) -> SubTree:
+    try:
+        return load_tree_json(root_dir, spec)
+    except FileNotFoundError:
+        if not _is_manual_sequence_spec(spec):
+            raise
+        tree = _build_empty_manual_tree(bom_id, spec)
+        save_tree_json(root_dir, spec, tree)
+        return tree
+
 @sub_router.post("/bom/upload")
 async def upload_bom(file: UploadFile = File(...)):
     binary = await file.read()
@@ -121,6 +168,9 @@ async def upload_bom(file: UploadFile = File(...)):
 @sub_router.get("/bom/{bom_id}/specs")
 def list_specs(bom_id: str):
     root = DATA_DIR / "bom_runs" / bom_id
+    if not root.exists():
+        return [_manual_sequence_spec_for_bom(bom_id)]
+
     spec_meta = read_spec_meta(root)
 
     sheets = spec_meta.get("spec_info", {}).get("sheets", [])
@@ -141,10 +191,8 @@ def list_specs(bom_id: str):
     tree_excel = root / "tree.xlsx"
 
     if not tree_excel.exists():
-        raise HTTPException(
-            status_code=404,
-            detail="tree.xlsx 파일이 없습니다."
-        )
+        manual_spec = _manual_sequence_spec_for_bom(bom_id)
+        return [manual_spec]
 
     try:
         wb = load_workbook(tree_excel, data_only=True)
@@ -202,36 +250,13 @@ def get_tree(
         raise HTTPException(status_code=400, detail="spec이 없습니다.")
 
     root_dir = DATA_DIR / "bom_runs" / bom_id
-    tree_json_path = root_dir / f"{resolved_spec}.json"
-
-    # 1. 캐시된 JSON 있으면 그대로 사용
-    if tree_json_path.exists():
-        tree = load_tree_json(root_dir, resolved_spec)
-    else:
-        # 2. 없으면 엑셀에서 생성
-        tree_excel = root_dir / "tree.xlsx"
-        if not tree_excel.exists():
-            raise HTTPException(status_code=404, detail="tree.xlsx 파일이 없습니다.")
-        
-        bom_meta = read_bom_meta(root_dir)
-        bom_filename = bom_meta.get("bom_filename")
-        if not bom_filename:
-            raise HTTPException(status_code=500, detail="bom_filename 없음")
-
-        wb = load_workbook(tree_excel, data_only=True)
-        if resolved_spec not in wb.sheetnames:
-            raise HTTPException(status_code=400, detail=f"시트 없음: {resolved_spec}")
-
-        ws = wb[resolved_spec]
-
-        tree = build_tree_from_sheet(
-            ws=ws,
-            bom_id=bom_id,
-            bom_filename=bom_filename,
-            spec_name=resolved_spec,
+    try:
+        tree = _load_or_create_tree(root_dir, bom_id, resolved_spec)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"사양 트리를 찾을 수 없습니다: {resolved_spec}",
         )
-
-        save_tree_json(root_dir, resolved_spec, tree)
 
     # 세션 갱신
     SESSION_STATE[sid] = {
@@ -276,7 +301,7 @@ def patch_node(
 
     root_dir = DATA_DIR / "bom_runs" / bom_id
 
-    tree = load_tree_json(root_dir, resolved_spec)
+    tree = _load_or_create_tree(root_dir, bom_id, resolved_spec)
     nodes = tree.nodes
 
     # 1️⃣ 기존 id 로 노드 찾기
@@ -327,6 +352,38 @@ def patch_node(
     return tree
 
 
+@sub_router.post("/bom/{bom_id}/tree/restore", response_model=SubTree)
+def restore_tree(
+    bom_id: str,
+    payload: SubTreeRestoreRequest,
+    request: Request,
+    response: Response,
+    spec: Optional[str] = Query(None),
+):
+    sid = get_or_create_sid(request, response)
+    refresh_session_state()
+    state = SESSION_STATE.get(sid, {})
+
+    resolved_spec = spec or state.get("spec")
+    if not resolved_spec:
+        raise HTTPException(status_code=400, detail="spec 없음")
+
+    root_dir = DATA_DIR / "bom_runs" / bom_id
+    tree = _load_or_create_tree(root_dir, bom_id, resolved_spec)
+    tree.nodes = payload.nodes
+
+    save_tree_json(root_dir, resolved_spec, tree)
+
+    SESSION_STATE[sid] = {
+        "bom_id": bom_id,
+        "spec": resolved_spec,
+        "selected_id": state.get("selected_id"),
+    }
+    save_session_state()
+
+    return tree
+
+
 @sub_router.patch("/bom/{bom_id}/move-node")
 def move_node(
     bom_id: str,
@@ -334,7 +391,7 @@ def move_node(
     req: MoveNodeRequest
 ):
     root_dir = DATA_DIR / "bom_runs" / bom_id
-    tree = load_tree_json(root_dir, spec)
+    tree = _load_or_create_tree(root_dir, bom_id, spec)
 
     nodes = tree.nodes
 
@@ -399,17 +456,18 @@ def create_node(
     payload: dict,
     request: Request,
     response: Response,
+    spec: Optional[str] = Query(None),
 ):
     sid = get_or_create_sid(request, response)
     refresh_session_state()
     state = SESSION_STATE.get(sid, {})
 
-    spec = state.get("spec")
-    if not spec:
+    resolved_spec = spec or state.get("spec")
+    if not resolved_spec:
         raise HTTPException(status_code=400, detail="spec 없음")
 
     root_dir = DATA_DIR / "bom_runs" / bom_id
-    tree = load_tree_json(root_dir, spec)
+    tree = _load_or_create_tree(root_dir, bom_id, resolved_spec)
     nodes = tree.nodes
 
     # 1️⃣ 클라이언트에서 넘어온 parent_name (대부분 "부모 id")
@@ -433,7 +491,7 @@ def create_node(
         parent_name = parent_node.name  # ⭐ 최종적으로 name만 사용
 
     # 3️⃣ 새 노드 UI name
-    name = payload.get("name") or f"{spec}:{uuid4()}"
+    name = payload.get("name") or f"{resolved_spec}:{uuid4()}"
 
     part_no   = payload.get("part_no")  or ""
     material  = payload.get("material") or ""
@@ -469,7 +527,7 @@ def create_node(
 
     nodes.append(new_node)
 
-    save_tree_json(root_dir, spec, tree)
+    save_tree_json(root_dir, resolved_spec, tree)
 
     return tree
 
@@ -481,18 +539,19 @@ def delete_node(
     node_name: str,
     request: Request,
     response: Response,
+    spec: Optional[str] = Query(None),
 ):
     sid = get_or_create_sid(request, response)
     refresh_session_state()
     state = SESSION_STATE.get(sid, {})
 
-    spec = state.get("spec")
-    if not spec:
+    resolved_spec = spec or state.get("spec")
+    if not resolved_spec:
         raise HTTPException(status_code=400, detail="spec 없음")
 
     root_dir = DATA_DIR / "bom_runs" / bom_id
 
-    tree = load_tree_json(root_dir, spec)
+    tree = _load_or_create_tree(root_dir, bom_id, resolved_spec)
     nodes = tree.nodes
 
     # 1️⃣ 삭제할 노드 찾기 (UI name 기준)
@@ -523,7 +582,7 @@ def delete_node(
     # 3️⃣ name 기준 삭제
     tree.nodes = [n for n in nodes if n.name not in to_delete]
 
-    save_tree_json(root_dir, spec, tree)
+    save_tree_json(root_dir, resolved_spec, tree)
 
     return tree
 
@@ -538,19 +597,20 @@ def add_node(
     body: SubNode,               # ← 그대로 사용
     request: Request,
     response: Response,
+    spec: Optional[str] = Query(None),
 ):
     sid = get_or_create_sid(request, response)
     refresh_session_state()
     state = SESSION_STATE.get(sid, {})
 
-    spec = state.get("spec")
-    if not spec:
+    resolved_spec = spec or state.get("spec")
+    if not resolved_spec:
         raise HTTPException(status_code=400, detail="spec 없음")
 
     root_dir = DATA_DIR / "bom_runs" / bom_id
 
     # 1️⃣ JSON 트리 로드
-    tree = load_tree_json(root_dir, spec)
+    tree = _load_or_create_tree(root_dir, bom_id, resolved_spec)
     nodes = list(tree.nodes)
 
     # 2️⃣ 부모가 존재하는지 확인 (root는 None 가능)
@@ -593,7 +653,7 @@ def add_node(
 
     # 6️⃣ 저장
     tree.nodes = nodes
-    save_tree_json(root_dir, spec, tree)
+    save_tree_json(root_dir, resolved_spec, tree)
 
     return new_node
 
@@ -617,8 +677,8 @@ async def export_excel(bom_id: str, spec: str):
     )
 
 
-@sub_router.get("/bom/{bom_id}/export_excel_bundle")
-async def export_excel_bundle(bom_id: str):
+@sub_router.post("/bom/{bom_id}/export_excel_bundle")
+async def export_excel_bundle(bom_id: str, payload: Optional[ExcelBundleExportRequest] = None):
     root = DATA_DIR / "bom_runs" / bom_id
     if not root.exists():
         raise HTTPException(status_code=404, detail="BOM 폴더가 없습니다.")
@@ -626,15 +686,32 @@ async def export_excel_bundle(bom_id: str):
     sub_json_paths = sorted(
         path for path in root.glob("*.json")
         if path.name not in {"bom_meta.json", "meta_spec.json"}
+        and not path.name.endswith("_cache.json")
         and not path.name.endswith("_sequence.json")
         and not path.name.endswith("_assembly.json")
     )
     assembly_json_paths = sorted(root.glob("*_assembly.json"))
 
-    if not sub_json_paths and not assembly_json_paths:
+    has_analysis_payload = bool(
+        payload
+        and (
+            payload.tactInputs
+            or payload.equipmentRows
+            or payload.tactTime is not None
+            or payload.annualVehicleTarget is not None
+        )
+    )
+
+    if not sub_json_paths and not assembly_json_paths and not has_analysis_payload:
         raise HTTPException(status_code=404, detail="엑셀로 변환할 JSON 파일이 없습니다.")
 
     workbook = 결과파일_초기화()
+    if not workbook.sheetnames and not sub_json_paths:
+        sheet = workbook.create_sheet(title="1. sub단위 부품 구성도")
+        sheet["A1"] = "sub단위 부품 구성도"
+        sheet["A1"].font = Font(size=16, bold=True)
+        sheet["A1"].alignment = Alignment(horizontal="center", vertical="center")
+        sheet.merge_cells("A1:F1")
 
     for json_path in sub_json_paths:
         with open(json_path, "r", encoding="utf-8") as file:
@@ -652,7 +729,50 @@ async def export_excel_bundle(bom_id: str):
             raw_json = json.load(file)
 
         spec_name = assembly_json_path.stem.replace("_assembly", "")
+        assembly_rows = raw_json.get("rows", []) if isinstance(raw_json, dict) else []
         append_assembly_sheet_to_workbook(raw_json, workbook, spec_name)
+        append_worker_lob_sheet_to_workbook(
+            workbook,
+            spec_name,
+            assembly_rows,
+            tact_time=(payload.tactTime if payload and payload.tactTime is not None else 0),
+            annual_vehicle_target=(
+                payload.annualVehicleTarget
+                if payload and payload.annualVehicleTarget is not None
+                else None
+            ),
+        )
+        append_tact_time_sheet_to_workbook(
+            workbook,
+            spec_name,
+            payload.tactInputs if payload else None,
+        )
+        append_equipment_lob_sheet_to_workbook(
+            workbook,
+            spec_name,
+            payload.equipmentRows if payload else None,
+            target_cycle_time=(payload.tactTime if payload and payload.tactTime is not None else 0) * 0.9,
+        )
+        append_process_design_sheet_to_workbook(
+            workbook,
+            spec_name,
+            assembly_rows,
+            payload.tactInputs if payload else None,
+        )
+
+    if not assembly_json_paths and payload:
+        spec_name = payload.spec or bom_id
+        append_tact_time_sheet_to_workbook(workbook, spec_name, payload.tactInputs)
+        append_equipment_lob_sheet_to_workbook(
+            workbook,
+            spec_name,
+            payload.equipmentRows,
+            target_cycle_time=(payload.tactTime if payload.tactTime is not None else 0) * 0.9,
+        )
+        append_process_design_sheet_to_workbook(workbook, spec_name, [], payload.tactInputs)
+
+    if workbook.sheetnames:
+        workbook.active = workbook[workbook.sheetnames[0]]
 
     output_buffer = io.BytesIO()
     workbook.save(output_buffer)
@@ -665,3 +785,8 @@ async def export_excel_bundle(bom_id: str):
             "Content-Disposition": f'attachment; filename="{bom_id}_excel_bundle.xlsx"'
         },
     )
+
+
+@sub_router.get("/bom/{bom_id}/export_excel_bundle")
+async def export_excel_bundle_legacy(bom_id: str):
+    return await export_excel_bundle(bom_id, None)

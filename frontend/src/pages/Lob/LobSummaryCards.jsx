@@ -4,8 +4,8 @@ export function SummaryCard({ title, value, accent }) {
   return (
     <div
       style={{
-        minWidth: 180,
-        flex: "1 1 180px",
+        minWidth: 0,
+        width: "100%",
         padding: 20,
         borderRadius: 20,
         background: "#ffffff",

@@ -19,7 +19,6 @@ function AssemblySelector({
   onAdd,
   onLoad,
   onSave,
-  onAutoMatch,
   onRecommendWorkers,
   onReset,
   canSave = true,
@@ -89,7 +88,6 @@ function AssemblySelector({
       <button onClick={onAdd}>추가</button>
       <button onClick={onLoad}>불러오기</button>
       <button onClick={onSave} disabled={!canSave}>저장</button>
-      <button onClick={onAutoMatch}>자동 추가</button>
       <button onClick={onRecommendWorkers} disabled={!canSave}>작업자 추천</button>
       <button onClick={onReset}>초기화</button>
 

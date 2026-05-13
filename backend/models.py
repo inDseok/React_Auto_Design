@@ -35,6 +35,10 @@ class SubTree(BaseModel):
     nodes: List[SubNode]
 
 
+class SubTreeRestoreRequest(BaseModel):
+    nodes: List[SubNode]
+
+
 class SubNodePatch(BaseModel):
     parent_name: Optional[str] = None
     order: Optional[int] = None

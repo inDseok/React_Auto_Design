@@ -16,6 +16,9 @@ import PartNode from "./nodes/PartNode";
 import ProcessNode from "./nodes/ProcessNode";
 
 const CANVAS_CURSOR = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M4 3.5v16l4.6-4.5 3.1 5.2 2.1-1.2-3-5.2h6.7L4 3.5z' fill='%23000' stroke='%23fff' stroke-width='1.4' stroke-linejoin='round'/%3E%3C/svg%3E") 3 3, default`;
+const AUTO_CONNECT_MAX_EDGE_DISTANCE = 200;
+const AUTO_CONNECT_MAX_NEIGHBOR_GAP_X = 600;
+const AUTO_CONNECT_MAX_NEIGHBOR_GAP_Y = 250;
 
 function getNodeSize(node) {
   const w = node.measured?.width ?? node.width ?? 180;
@@ -28,7 +31,338 @@ function getNodeCenter(node) {
   return { x: node.position.x + w / 2, y: node.position.y + h / 2 };
 }
 
-function computeGroupBBox(nodeIds, nodes) {
+function getDropNodeCenter(position, nodeType) {
+  const fallbackNode =
+    nodeType === "PROCESS"
+      ? { width: 220, height: 72 }
+      : { width: 180, height: 72 };
+
+  return {
+    x: position.x + fallbackNode.width / 2,
+    y: position.y + fallbackNode.height / 2,
+  };
+}
+
+function distancePointToSegment(point, start, end) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+
+  if (dx === 0 && dy === 0) {
+    return Math.hypot(point.x - start.x, point.y - start.y);
+  }
+
+  const t = Math.max(
+    0,
+    Math.min(
+      1,
+      ((point.x - start.x) * dx + (point.y - start.y) * dy) / (dx * dx + dy * dy)
+    )
+  );
+
+  const projection = {
+    x: start.x + t * dx,
+    y: start.y + t * dy,
+  };
+
+  return Math.hypot(point.x - projection.x, point.y - projection.y);
+}
+
+function findEdgeInsertionTarget(
+  point,
+  nodes = [],
+  edges = [],
+  maxDistance = AUTO_CONNECT_MAX_EDGE_DISTANCE
+) {
+  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+  let best = null;
+
+  for (const edge of edges) {
+    const sourceNode = nodeMap.get(edge.source);
+    const targetNode = nodeMap.get(edge.target);
+    if (!sourceNode || !targetNode || edge.source === edge.target) {
+      continue;
+    }
+
+    const distance = distancePointToSegment(
+      point,
+      getNodeCenter(sourceNode),
+      getNodeCenter(targetNode)
+    );
+
+    if (distance > maxDistance) {
+      continue;
+    }
+
+    if (!best || distance < best.distance) {
+      best = { edge, distance };
+    }
+  }
+
+  return best?.edge ?? null;
+}
+
+function findNeighborInsertionTarget(
+  point,
+  nodes = [],
+  maxGapX = AUTO_CONNECT_MAX_NEIGHBOR_GAP_X,
+  maxGapY = AUTO_CONNECT_MAX_NEIGHBOR_GAP_Y
+) {
+  const centers = nodes
+    .map((node) => ({
+      node,
+      center: getNodeCenter(node),
+    }))
+    .sort((left, right) => compareNodesBySequencePosition(left.node, right.node));
+
+  let leftNeighbor = null;
+  let rightNeighbor = null;
+
+  for (const item of centers) {
+    const dx = Math.abs(item.center.x - point.x);
+    const dy = Math.abs(item.center.y - point.y);
+    if (dx > maxGapX || dy > maxGapY) {
+      continue;
+    }
+
+    if (item.center.x <= point.x) {
+      if (!leftNeighbor || item.center.x > leftNeighbor.center.x) {
+        leftNeighbor = item;
+      }
+      continue;
+    }
+
+    if (!rightNeighbor || item.center.x < rightNeighbor.center.x) {
+      rightNeighbor = item;
+    }
+  }
+
+  if (!leftNeighbor && !rightNeighbor) {
+    return null;
+  }
+
+  return {
+    source: leftNeighbor?.node?.id ?? null,
+    target: rightNeighbor?.node?.id ?? null,
+  };
+}
+
+function findGroupInsertionContext(point, groups = [], nodes = []) {
+  const candidates = groups
+    .map((group) => ({
+      group,
+      bbox: computeGroupBBox(group.nodeIds || [], nodes, 72),
+    }))
+    .filter((item) => item.bbox && isPointInsideBBox(point, item.bbox))
+    .sort(
+      (left, right) =>
+        left.bbox.width * left.bbox.height - right.bbox.width * right.bbox.height
+    );
+
+  if (!candidates.length) {
+    return null;
+  }
+
+  const { group } = candidates[0];
+  const orderedNodeIds = orderNodeIdsByLayout(group.nodeIds || [], nodes);
+  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+
+  let insertionIndex = orderedNodeIds.length;
+  for (let index = 0; index < orderedNodeIds.length; index += 1) {
+    const node = nodeMap.get(orderedNodeIds[index]);
+    if (!node) {
+      continue;
+    }
+
+    const center = getNodeCenter(node);
+    if (point.x < center.x) {
+      insertionIndex = index;
+      break;
+    }
+  }
+
+  return {
+    group,
+    orderedNodeIds,
+    insertionIndex,
+  };
+}
+
+function isEdgeWithinNodeSet(edge, nodeIds = []) {
+  const nodeIdSet = new Set(nodeIds);
+  return nodeIdSet.has(edge?.source) && nodeIdSet.has(edge?.target);
+}
+
+function isNodeInGroups(nodeId, groups = []) {
+  return (groups || []).some((group) => (group.nodeIds || []).includes(nodeId));
+}
+
+function rebuildStandaloneMovedNodeEdges({
+  finishedMoves = [],
+  nextNodes = [],
+  prevEdges = [],
+  nextGroups = [],
+}) {
+  // 이동된 노드 중 그룹에 속하지 않는 것만 대상
+  const movedNodeIds = new Set(
+    (finishedMoves || [])
+      .map((m) => m.id)
+      .filter((id) => id && !isNodeInGroups(id, nextGroups))
+  );
+
+  if (movedNodeIds.size === 0) return [...(prevEdges || [])];
+
+  // 이동 전 각 노드의 외부 선행자·후행자 기억 (체인 치유에 사용)
+  const predecessorsOf = new Map();
+  const successorsOf = new Map();
+  for (const movedNodeId of movedNodeIds) {
+    predecessorsOf.set(
+      movedNodeId,
+      (prevEdges || [])
+        .filter((e) => e.target === movedNodeId && !movedNodeIds.has(e.source))
+        .map((e) => e.source)
+    );
+    successorsOf.set(
+      movedNodeId,
+      (prevEdges || [])
+        .filter((e) => e.source === movedNodeId && !movedNodeIds.has(e.target))
+        .map((e) => e.target)
+    );
+  }
+
+  // 이동된 노드와 외부 노드 사이의 엣지만 제거(내부 엣지는 유지)
+  let workingEdges = (prevEdges || []).filter((edge) => {
+    const srcMoved = movedNodeIds.has(edge.source);
+    const tgtMoved = movedNodeIds.has(edge.target);
+    // 양쪽 다 이동: 내부 연결 → 유지
+    // 양쪽 다 고정: 외부 연결 → 유지
+    // 한쪽만 이동: 이동 노드 연결 → 제거 후 재연결
+    return srcMoved === tgtMoved;
+  });
+
+  // 체인 치유: 노드가 빠져나간 자리에 선행자→후행자 직결 엣지 복원
+  for (const movedNodeId of movedNodeIds) {
+    const preds = predecessorsOf.get(movedNodeId) || [];
+    const succs = successorsOf.get(movedNodeId) || [];
+    for (const predId of preds) {
+      for (const succId of succs) {
+        if (predId === succId) continue;
+        if (workingEdges.some((e) => e.source === predId && e.target === succId)) continue;
+        workingEdges.push({
+          id: `MANUAL:heal:${predId}:${succId}:${Date.now()}-${workingEdges.length}`,
+          source: predId,
+          target: succId,
+          type: "straight",
+          sourceHandle: "out",
+          targetHandle: "in",
+          data: { manual: true, healedChain: true },
+        });
+      }
+    }
+  }
+
+  const externalNodes = nextNodes.filter((n) => !movedNodeIds.has(n.id));
+
+  for (const movedNodeId of movedNodeIds) {
+    const movedNode = nextNodes.find((n) => n.id === movedNodeId);
+    if (!movedNode) continue;
+
+    const insertionPoint = getNodeCenter(movedNode);
+
+    // 외부 노드끼리의 엣지만 삽입 후보로 사용
+    const externalEdges = workingEdges.filter(
+      (edge) => !movedNodeIds.has(edge.source) && !movedNodeIds.has(edge.target)
+    );
+
+    const insertionEdge = findEdgeInsertionTarget(insertionPoint, nextNodes, externalEdges);
+    const neighborTarget = !insertionEdge
+      ? findNeighborInsertionTarget(insertionPoint, externalNodes)
+      : null;
+
+    let effectiveSourceId = insertionEdge?.source ?? neighborTarget?.source ?? null;
+    let effectiveTargetId = insertionEdge?.target ?? neighborTarget?.target ?? null;
+
+    if (!effectiveSourceId && !effectiveTargetId) continue;
+
+    // 삽입 엣지 제거
+    workingEdges = workingEdges.filter((e) => e.id !== insertionEdge?.id);
+
+    const movedCenterX = insertionPoint.x;
+
+    // sourceId만 찾혔을 때: source의 우측 방향 기존 엣지를 가로채기
+    if (effectiveSourceId && !effectiveTargetId) {
+      const candidates = workingEdges
+        .filter((e) => {
+          if (e.source !== effectiveSourceId || movedNodeIds.has(e.target)) return false;
+          const tNode = nextNodes.find((n) => n.id === e.target);
+          return tNode && getNodeCenter(tNode).x > movedCenterX;
+        })
+        .sort((a, b) => {
+          const ax = getNodeCenter(nextNodes.find((n) => n.id === a.target))?.x ?? Infinity;
+          const bx = getNodeCenter(nextNodes.find((n) => n.id === b.target))?.x ?? Infinity;
+          return ax - bx;
+        });
+      if (candidates.length > 0) {
+        workingEdges = workingEdges.filter((e) => e.id !== candidates[0].id);
+        effectiveTargetId = candidates[0].target;
+      }
+    }
+
+    // targetId만 찾혔을 때: target의 좌측 방향 기존 엣지를 가로채기
+    if (!effectiveSourceId && effectiveTargetId) {
+      const candidates = workingEdges
+        .filter((e) => {
+          if (e.target !== effectiveTargetId || movedNodeIds.has(e.source)) return false;
+          const sNode = nextNodes.find((n) => n.id === e.source);
+          return sNode && getNodeCenter(sNode).x < movedCenterX;
+        })
+        .sort((a, b) => {
+          const ax = getNodeCenter(nextNodes.find((n) => n.id === a.source))?.x ?? -Infinity;
+          const bx = getNodeCenter(nextNodes.find((n) => n.id === b.source))?.x ?? -Infinity;
+          return bx - ax;
+        });
+      if (candidates.length > 0) {
+        workingEdges = workingEdges.filter((e) => e.id !== candidates[0].id);
+        effectiveSourceId = candidates[0].source;
+      }
+    }
+
+    // source→target 직결 엣지 제거
+    if (effectiveSourceId && effectiveTargetId) {
+      workingEdges = workingEdges.filter(
+        (e) => !(e.source === effectiveSourceId && e.target === effectiveTargetId)
+      );
+    }
+
+    const timestamp = Date.now();
+    if (effectiveSourceId) {
+      workingEdges.push({
+        id: `MANUAL:${effectiveSourceId}:${movedNodeId}:${timestamp}-${workingEdges.length}`,
+        source: effectiveSourceId,
+        target: movedNodeId,
+        type: "straight",
+        sourceHandle: insertionEdge?.sourceHandle ?? "out",
+        targetHandle: "in",
+        data: { manual: true, insertedByMove: true },
+      });
+    }
+
+    if (effectiveTargetId) {
+      workingEdges.push({
+        id: `MANUAL:${movedNodeId}:${effectiveTargetId}:${timestamp}-${workingEdges.length + 1}`,
+        source: movedNodeId,
+        target: effectiveTargetId,
+        type: "straight",
+        sourceHandle: "out",
+        targetHandle: insertionEdge?.targetHandle ?? "in",
+        data: { manual: true, insertedByMove: true },
+      });
+    }
+  }
+
+  return workingEdges;
+}
+
+function computeGroupBBox(nodeIds, nodes, pad = 16) {
   const targets = nodes.filter((n) => nodeIds.includes(n.id));
   if (targets.length === 0) return null;
 
@@ -41,7 +375,6 @@ function computeGroupBBox(nodeIds, nodes) {
   const minY = Math.min(...ys);
   const maxX = Math.max(...xs.map((x, i) => x + ws[i]));
   const maxY = Math.max(...ys.map((y, i) => y + hs[i]));
-  const pad = 16;
 
   return {
     x: minX - pad,
@@ -72,6 +405,80 @@ function uniqueKeepOrder(arr) {
   return out;
 }
 
+function compareNodesBySequencePosition(a, b) {
+  const ay = Number.isFinite(a?.position?.y) ? a.position.y : 0;
+  const by = Number.isFinite(b?.position?.y) ? b.position.y : 0;
+  const ax = Number.isFinite(a?.position?.x) ? a.position.x : 0;
+  const bx = Number.isFinite(b?.position?.x) ? b.position.x : 0;
+
+  if (Math.abs(ax - bx) > 120) {
+    return ax - bx;
+  }
+  if (Math.abs(ay - by) > 24) {
+    return ay - by;
+  }
+  return String(a?.id || "").localeCompare(String(b?.id || ""));
+}
+
+function orderNodeIdsByLayout(nodeIds = [], nodes = []) {
+  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+
+  return uniqueKeepOrder(nodeIds)
+    .filter((nodeId) => nodeMap.has(nodeId))
+    .sort((leftId, rightId) =>
+      compareNodesBySequencePosition(nodeMap.get(leftId), nodeMap.get(rightId))
+    );
+}
+
+function normalizeGroupsWithNodes(groups = [], nodes = [], minSize = 2) {
+  return groups
+    .map((group) => ({
+      ...group,
+      nodeIds: orderNodeIdsByLayout(group.nodeIds || [], nodes),
+      skippedAutoEdgeIds: Array.isArray(group.skippedAutoEdgeIds)
+        ? uniqueKeepOrder(group.skippedAutoEdgeIds)
+        : [],
+    }))
+    .filter((group) => (group.nodeIds || []).length >= minSize);
+}
+
+function buildManualSequentialEdgesForNodeIds(nodeIds = [], groupId = "") {
+  const edges = [];
+
+  for (let index = 0; index < nodeIds.length - 1; index += 1) {
+    const source = nodeIds[index];
+    const target = nodeIds[index + 1];
+    if (!source || !target || source === target) {
+      continue;
+    }
+
+    edges.push({
+      id: `MANUAL:${groupId}:${source}:${target}`,
+      source,
+      target,
+      type: "straight",
+      sourceHandle: "out",
+      targetHandle: "in",
+      data: {
+        manual: true,
+        connectedByGroup: true,
+        groupId,
+      },
+    });
+  }
+
+  return edges;
+}
+
+function isSameConnection(left, right) {
+  return (
+    left?.source === right?.source &&
+    left?.target === right?.target &&
+    (left?.sourceHandle ?? "out") === (right?.sourceHandle ?? "out") &&
+    (left?.targetHandle ?? "in") === (right?.targetHandle ?? "in")
+  );
+}
+
 function isMultiSelectEvent(event) {
   return Boolean(event?.ctrlKey || event?.metaKey);
 }
@@ -96,6 +503,24 @@ function normalizeGroups(groups = [], minSize = 2) {
     .filter((g) => (g.nodeIds || []).length >= minSize);
 }
 
+function hasSameGroupMembers(groups = [], targetNodeIds = [], nodes = []) {
+  const normalizedTarget = orderNodeIdsByLayout(targetNodeIds, nodes);
+  if (normalizedTarget.length < 2) {
+    return false;
+  }
+
+  return (groups || []).some((group) => {
+    const normalizedGroup = orderNodeIdsByLayout(group.nodeIds || [], nodes);
+    if (normalizedGroup.length !== normalizedTarget.length) {
+      return false;
+    }
+    return normalizedGroup.every((nodeId, index) => nodeId === normalizedTarget[index]);
+  });
+}
+
+const GROUP_STAY_PAD = 400;   // 이미 속한 그룹에서 벗어나는 판정 허용 범위
+const GROUP_JOIN_PAD = 72;    // 새로 그룹에 들어가는 판정 허용 범위
+
 function syncMembership(groups, nextNodes, finishedMoves, minSize = 2) {
   const nextGroups = (groups || []).map((g) => ({
     ...g,
@@ -110,7 +535,14 @@ function syncMembership(groups, nextNodes, finishedMoves, minSize = 2) {
     let targetGroupId = null;
 
     for (const group of nextGroups) {
-      const bbox = computeGroupBBox(group.nodeIds, nextNodes);
+      const candidateNodeIds = (group.nodeIds || []).filter((nodeId) => nodeId !== node.id);
+      if (candidateNodeIds.length === 0) continue;
+
+      // 이미 이 그룹 멤버였으면 탈출 허용 범위를 크게 적용
+      const isAlreadyMember = (group.nodeIds || []).includes(node.id);
+      const hitPad = isAlreadyMember ? GROUP_STAY_PAD : GROUP_JOIN_PAD;
+
+      const bbox = computeGroupBBox(candidateNodeIds, nextNodes, hitPad);
       if (!bbox) continue;
       if (isPointInsideBBox(center, bbox)) {
         targetGroupId = group.id;
@@ -130,7 +562,31 @@ function syncMembership(groups, nextNodes, finishedMoves, minSize = 2) {
     }
   }
 
-  return normalizeGroups(nextGroups, minSize);
+  return normalizeGroupsWithNodes(nextGroups, nextNodes, minSize);
+}
+
+function pruneInvalidGroupConnectedEdges(edges = [], groups = []) {
+  const validPairs = new Set();
+
+  for (const group of groups || []) {
+    const nodeIds = uniqueKeepOrder(group.nodeIds || []);
+    for (let index = 0; index < nodeIds.length - 1; index += 1) {
+      const source = nodeIds[index];
+      const target = nodeIds[index + 1];
+      if (!source || !target || source === target) {
+        continue;
+      }
+      validPairs.add(`${group.id}::${source}::${target}`);
+    }
+  }
+
+  return (edges || []).filter((edge) => {
+    if (!edge?.data?.connectedByGroup || !edge?.data?.groupId) {
+      return true;
+    }
+    const pairKey = `${edge.data.groupId}::${edge.source}::${edge.target}`;
+    return validPairs.has(pairKey);
+  });
 }
 
 function applyWorkerLabelsToNodes(nodes, workerGroups = []) {
@@ -165,9 +621,12 @@ function GroupLayer({
   setNodes,
   setGroups,
   onEditingChange,
+  onRequestConnectGroup,
   style,
   deleteLabel,
   emptyLabel,
+  showConnectAction = false,
+  labelPosition = "top-left",
 }) {
   const transform = useStore((s) => s.transform);
   const [tx, ty, zoom] = transform;
@@ -301,8 +760,9 @@ function GroupLayer({
             <div
               style={{
                 position: "absolute",
-                left: bbox.x + 8,
-                top: bbox.y + 8,
+                ...(labelPosition === "top-right"
+                  ? { left: bbox.x + bbox.width - 8, top: bbox.y + 8, transform: "translateX(-100%)" }
+                  : { left: bbox.x + 8, top: bbox.y + 8 }),
                 pointerEvents: "auto",
                 cursor: "move",
               }}
@@ -387,6 +847,23 @@ function GroupLayer({
                   >
                     {deleteLabel}
                   </div>
+                  {showConnectAction ? (
+                    <div
+                      style={{
+                        padding: "6px 12px",
+                        cursor: "pointer",
+                        borderTop: "1px solid #eef2f7",
+                        color: "#1d4ed8",
+                        fontWeight: 600,
+                      }}
+                      onClick={() => {
+                        onRequestConnectGroup?.(group.id);
+                        setContextMenuGroupId(null);
+                      }}
+                    >
+                      노드 연결
+                    </div>
+                  ) : null}
                 </div>
               )}
             </div>
@@ -415,7 +892,6 @@ export default function SequenceCanvas({
   const { screenToFlowPosition } = useReactFlow();
   const [isGroupEditing, setIsGroupEditing] = useState(false);
   const [selectedNodeIds, setSelectedNodeIds] = useState([]);
-
   const nodeTypes = useMemo(
     () => ({
       PART: PartNode,
@@ -494,11 +970,35 @@ export default function SequenceCanvas({
               1
             );
 
+            // 이동이 끝난 노드가 속한 그룹의 순서 기반 엣지 자동 재구성
+            const movedNodeIds = new Set(finishedMoves.map((m) => m.id));
+            let prunedEdges = pruneInvalidGroupConnectedEdges(prev.edges || [], nextGroups);
+            for (const group of nextGroups) {
+              const hasMovedMember = (group.nodeIds || []).some((id) => movedNodeIds.has(id));
+              if (!hasMovedMember) continue;
+              const orderedNodeIds = orderNodeIdsByLayout(group.nodeIds || [], nextNodes);
+              // 이 그룹의 auto-generated 엣지만 교체 (수동 엣지는 유지)
+              prunedEdges = [
+                ...prunedEdges.filter(
+                  (e) => !(e.data?.connectedByGroup && e.data?.groupId === group.id)
+                ),
+                ...buildManualSequentialEdgesForNodeIds(orderedNodeIds, group.id),
+              ];
+            }
+
+            const rebuiltStandaloneEdges = rebuildStandaloneMovedNodeEdges({
+              finishedMoves,
+              nextNodes,
+              prevEdges: prunedEdges,
+              nextGroups,
+            });
+
             return {
               ...prev,
               nodes: applyWorkerLabelsToNodes(nextNodes, nextWorkerGroups),
               groups: nextGroups,
               workerGroups: nextWorkerGroups,
+              edges: rebuiltStandaloneEdges,
             };
           },
           { recordHistory: shouldRecordHistory }
@@ -551,17 +1051,41 @@ export default function SequenceCanvas({
 
   const onConnect = useCallback(
     (params) => {
-      setEdges((eds) =>
-        eds.concat({
-          ...params,
-          id: params.id || `E-${params.source}-${params.target}-${Date.now()}`,
-          type: "smoothstep",
-          sourceHandle: params.sourceHandle ?? "out",
-          targetHandle: params.targetHandle ?? "in",
-        })
-      );
+      const nextEdge = {
+        id: params.id || `MANUAL:${params.source}:${params.target}:${Date.now()}`,
+        source: params.source,
+        target: params.target,
+        type: "straight",
+        sourceHandle: params.sourceHandle ?? "out",
+        targetHandle: params.targetHandle ?? "in",
+        data: {
+          manual: true,
+        },
+      };
+
+      if (flowControls?.applyFlowChange) {
+        flowControls.applyFlowChange((prev) => {
+          const existingEdges = prev.edges || [];
+          if (existingEdges.some((edge) => isSameConnection(edge, nextEdge))) {
+            return prev;
+          }
+
+          return {
+            ...prev,
+            edges: [...existingEdges, nextEdge],
+          };
+        });
+        return;
+      }
+
+      setEdges((prev) => {
+        if (prev.some((edge) => isSameConnection(edge, nextEdge))) {
+          return prev;
+        }
+        return [...prev, nextEdge];
+      });
     },
-    [setEdges]
+    [flowControls, setEdges]
   );
 
   const onSelectionChange = useCallback(
@@ -590,17 +1114,75 @@ export default function SequenceCanvas({
       ? selectedNodeIds
       : nodes.filter((node) => node.selected).map((node) => node.id);
     if (selectedIds.length < 2) return;
-
+    const orderedSelectedIds = orderNodeIdsByLayout(selectedIds, nodes);
+    if (hasSameGroupMembers(groups, orderedSelectedIds, nodes)) {
+      return;
+    }
     const newId = `grp-${crypto.randomUUID()}`;
-    setGroups((prev) => [
-      ...prev,
-      {
-        id: newId,
-        nodeIds: selectedIds,
-        label: `그룹 ${prev.length + 1}`,
-      },
-    ]);
-  }, [nodes, selectedNodeIds, setGroups]);
+    const nextGroup = {
+      id: newId,
+      nodeIds: orderedSelectedIds,
+      label: `그룹 ${groups.length + 1}`,
+      skippedAutoEdgeIds: [],
+    };
+
+    if (flowControls?.applyFlowChange) {
+      flowControls.applyFlowChange((prev) => ({
+        ...prev,
+        groups: [...(prev.groups || []), nextGroup],
+      }));
+      return;
+    }
+
+    setGroups((prev) => [...prev, nextGroup]);
+  }, [flowControls, groups.length, nodes, selectedNodeIds, setGroups]);
+
+  const connectGroupNodes = useCallback(
+    (groupId) => {
+      if (!groupId) return;
+
+      const applyConnection = (prev) => {
+        const targetGroup = (prev.groups || []).find((group) => group.id === groupId);
+        if (!targetGroup) {
+          return prev;
+        }
+
+        const orderedNodeIds = orderNodeIdsByLayout(targetGroup.nodeIds || [], prev.nodes || []);
+        if (orderedNodeIds.length < 2) {
+          return prev;
+        }
+
+        return {
+          ...prev,
+          groups: (prev.groups || []).map((group) =>
+            group.id === groupId ? { ...group, nodeIds: orderedNodeIds } : group
+          ),
+          edges: [
+            ...(prev.edges || []).filter((edge) => !isEdgeWithinNodeSet(edge, orderedNodeIds)),
+            ...buildManualSequentialEdgesForNodeIds(orderedNodeIds, groupId),
+          ],
+        };
+      };
+
+      if (flowControls?.applyFlowChange) {
+        flowControls.applyFlowChange(applyConnection);
+      } else {
+        const targetGroup = (groups || []).find((group) => group.id === groupId);
+        const orderedNodeIds = orderNodeIdsByLayout(targetGroup?.nodeIds || [], nodes || []);
+        setGroups((prev) =>
+          prev.map((group) =>
+            group.id === groupId ? { ...group, nodeIds: orderedNodeIds } : group
+          )
+        );
+        setEdges((prev) => [
+          ...prev.filter((edge) => !isEdgeWithinNodeSet(edge, orderedNodeIds)),
+          ...buildManualSequentialEdgesForNodeIds(orderedNodeIds, groupId),
+        ]);
+      }
+
+    },
+    [flowControls, groups, nodes, setEdges, setGroups]
+  );
 
   const createWorkerGroupFromSelection = useCallback(() => {
     const selectedIds = selectedNodeIds.length
@@ -649,19 +1231,179 @@ export default function SequenceCanvas({
         label = dragItem.data.label ?? dragItem.data.processType ?? "PROCESS";
       }
 
-      setNodes((nds) =>
-        nds.concat({
-          id: `N-${Date.now()}`,
-          type: dragItem.nodeType,
-          position,
-          data: {
-            ...dragItem.data,
-            label,
-          },
-        })
-      );
+      const nextNode = {
+        id: `N-${Date.now()}`,
+        type: dragItem.nodeType,
+        position,
+        data: {
+          ...dragItem.data,
+          label,
+        },
+      };
+      const insertionPoint = getDropNodeCenter(position, dragItem.nodeType);
+
+      if (flowControls?.applyFlowChange) {
+        flowControls.applyFlowChange((prev) => {
+          const groupInsertion = findGroupInsertionContext(
+            insertionPoint,
+            prev.groups || [],
+            prev.nodes || []
+          );
+          const insertionEdge = findEdgeInsertionTarget(
+            insertionPoint,
+            prev.nodes || [],
+            prev.edges || []
+          );
+          const neighborTarget = !insertionEdge && !groupInsertion?.group
+            ? findNeighborInsertionTarget(insertionPoint, prev.nodes || [])
+            : null;
+
+          if (groupInsertion?.group) {
+            const newNodeIds = [
+              ...groupInsertion.orderedNodeIds.slice(0, groupInsertion.insertionIndex),
+              nextNode.id,
+              ...groupInsertion.orderedNodeIds.slice(groupInsertion.insertionIndex),
+            ];
+            const updatedGroup = { ...groupInsertion.group, nodeIds: newNodeIds };
+            const nextGroups = (prev.groups || []).map((group) =>
+              group.id === updatedGroup.id ? updatedGroup : group
+            );
+            const nextNodes = [...(prev.nodes || []), nextNode];
+            const orderedNodeIds = orderNodeIdsByLayout(newNodeIds, nextNodes);
+            const groupEdges = buildManualSequentialEdgesForNodeIds(orderedNodeIds, updatedGroup.id);
+            const prevEdgesWithoutGroup = (prev.edges || []).filter(
+              (e) => !(e.data?.connectedByGroup && e.data?.groupId === updatedGroup.id)
+            );
+
+            return {
+              ...prev,
+              nodes: nextNodes,
+              groups: nextGroups,
+              edges: [...prevEdgesWithoutGroup, ...groupEdges],
+            };
+          }
+
+          if (!insertionEdge && !neighborTarget?.source && !neighborTarget?.target) {
+            return {
+              ...prev,
+              nodes: [...(prev.nodes || []), nextNode],
+            };
+          }
+
+          const sourceId = insertionEdge?.source ?? neighborTarget?.source ?? null;
+          const targetId = insertionEdge?.target ?? neighborTarget?.target ?? null;
+          const replacementEdges = [
+            sourceId
+              ? {
+                  id: `MANUAL:${sourceId}:${nextNode.id}:${Date.now()}`,
+                  source: sourceId,
+                  target: nextNode.id,
+                  type: "straight",
+                  sourceHandle: insertionEdge?.sourceHandle ?? "out",
+                  targetHandle: "in",
+                  data: {
+                    manual: true,
+                    insertedByDrop: true,
+                  },
+                }
+              : null,
+            targetId
+              ? {
+                  id: `MANUAL:${nextNode.id}:${targetId}:${Date.now() + 1}`,
+                  source: nextNode.id,
+                  target: targetId,
+                  type: "straight",
+                  sourceHandle: "out",
+                  targetHandle: insertionEdge?.targetHandle ?? "in",
+                  data: {
+                    manual: true,
+                    insertedByDrop: true,
+                  },
+                }
+              : null,
+          ].filter(Boolean);
+
+          return {
+            ...prev,
+            nodes: [...(prev.nodes || []), nextNode],
+            edges: [
+              ...(prev.edges || []).filter((edge) => {
+                if (insertionEdge) return edge.id !== insertionEdge.id;
+                if (sourceId && targetId) return !(edge.source === sourceId && edge.target === targetId);
+                return true;
+              }),
+              ...replacementEdges,
+            ],
+          };
+        });
+        return;
+      }
+
+      const groupInsertion = findGroupInsertionContext(insertionPoint, groups || [], nodes || []);
+      const insertionEdge = findEdgeInsertionTarget(insertionPoint, nodes || [], edges || []);
+      const neighborTarget = !insertionEdge && !groupInsertion?.group
+        ? findNeighborInsertionTarget(insertionPoint, nodes || [])
+        : null;
+      setNodes((nds) => nds.concat(nextNode));
+      if (groupInsertion?.group) {
+        const updatedGroup = {
+          ...groupInsertion.group,
+          nodeIds: [
+            ...groupInsertion.orderedNodeIds.slice(0, groupInsertion.insertionIndex),
+            nextNode.id,
+            ...groupInsertion.orderedNodeIds.slice(groupInsertion.insertionIndex),
+          ],
+        };
+        setGroups((prevGroups) =>
+          prevGroups.map((group) => (group.id === updatedGroup.id ? updatedGroup : group))
+        );
+        return;
+      }
+      if (insertionEdge || neighborTarget?.source || neighborTarget?.target) {
+        const sourceId = insertionEdge?.source ?? neighborTarget?.source ?? null;
+        const targetId = insertionEdge?.target ?? neighborTarget?.target ?? null;
+        setEdges((prevEdges) => [
+          ...prevEdges.filter((edge) => {
+            if (insertionEdge) return edge.id !== insertionEdge.id;
+            if (sourceId && targetId) return !(edge.source === sourceId && edge.target === targetId);
+            return true;
+          }),
+          ...(sourceId
+            ? [
+                {
+                  id: `MANUAL:${sourceId}:${nextNode.id}:${Date.now()}`,
+                  source: sourceId,
+                  target: nextNode.id,
+                  type: "straight",
+                  sourceHandle: insertionEdge?.sourceHandle ?? "out",
+                  targetHandle: "in",
+                  data: {
+                    manual: true,
+                    insertedByDrop: true,
+                  },
+                },
+              ]
+            : []),
+          ...(targetId
+            ? [
+                {
+                  id: `MANUAL:${nextNode.id}:${targetId}:${Date.now() + 1}`,
+                  source: nextNode.id,
+                  target: targetId,
+                  type: "straight",
+                  sourceHandle: "out",
+                  targetHandle: insertionEdge?.targetHandle ?? "in",
+                  data: {
+                    manual: true,
+                    insertedByDrop: true,
+                  },
+                },
+              ]
+            : []),
+        ]);
+      }
     },
-    [dragItem, screenToFlowPosition, setNodes]
+    [dragItem, edges, flowControls, groups, nodes, screenToFlowPosition, setEdges, setGroups, setNodes]
   );
 
   function isTextEditingTarget(target) {
@@ -748,7 +1490,7 @@ export default function SequenceCanvas({
           cancelGroupEdit();
           onNodeClick(e, node);
         }}
-        onEdgeClick={(e, edge) => {
+        onEdgeClick={(_e, edge) => {
           cancelGroupEdit();
           setNodes((prev) =>
             prev.map((item) => ({
@@ -799,8 +1541,12 @@ export default function SequenceCanvas({
         setNodes={setNodes}
         setGroups={setGroups}
         onEditingChange={setIsGroupEditing}
+        onRequestConnectGroup={(groupId) => {
+          connectGroupNodes(groupId);
+        }}
         deleteLabel="그룹 삭제"
         emptyLabel="이름 없음"
+        showConnectAction
         style={{
           zIndex: 10,
           border: "2px dashed #2563eb",
@@ -818,8 +1564,10 @@ export default function SequenceCanvas({
         setNodes={setNodes}
         setGroups={setWorkerGroupsAndSync}
         onEditingChange={setIsGroupEditing}
+        onRequestConnectGroup={null}
         deleteLabel="작업자 그룹 삭제"
         emptyLabel="작업자 미지정"
+        labelPosition="top-right"
         style={{
           zIndex: 11,
           border: "2px dotted #d97706",

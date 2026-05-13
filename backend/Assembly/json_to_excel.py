@@ -79,7 +79,11 @@ def _resolve_row_fill(no_value: Any):
 
 
 def _build_effective_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    effective_rows = [dict(row) for row in rows if isinstance(row, dict)]
+    effective_rows = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        effective_rows.append(dict(row))
     fill_down_columns = ["부품 기준", "요소작업", "OPTION"]
 
     for column in fill_down_columns:
@@ -141,8 +145,8 @@ def _merge_vertical_runs(
     block_start_offset = 0
 
     for index in range(1, len(group_rows) + 1):
-        current_key = _normalize_text(group_rows[index]["__partInstanceKey"]) if index < len(group_rows) else ""
-        previous_key = _normalize_text(group_rows[index - 1]["__partInstanceKey"])
+        current_key = _normalize_text(group_rows[index].get("__partInstanceKey", "")) if index < len(group_rows) else ""
+        previous_key = _normalize_text(group_rows[index - 1].get("__partInstanceKey", ""))
 
         if index < len(group_rows) and current_key == previous_key:
             continue
@@ -224,16 +228,26 @@ def append_assembly_sheet_to_workbook(
     current_row = 4
     last_column = len(ASSEMBLY_COLUMNS)
 
+    sec_col = get_column_letter(field_indexes["SEC"])
+    total_col = get_column_letter(field_indexes["TOTAL"])
+    repeat_col = get_column_letter(field_indexes["반복횟수"])
+
+    group_summary_sec_rows: List[int] = []
+    group_summary_total_rows: List[int] = []
+
     for group in grouped_rows:
         group_start_row = current_row
-        group_sec_total = 0.0
-        group_total = 0.0
 
         for row in group["rows"]:
             row_fill = _resolve_row_fill(row.get("no"))
             for col_idx, (field, _) in enumerate(ASSEMBLY_COLUMNS, start=1):
                 cell = ws.cell(row=current_row, column=col_idx)
-                cell.value = _normalize_value(row.get(field, ""))
+                if field == "TOTAL":
+                    cell.value = f"={sec_col}{current_row}*{repeat_col}{current_row}"
+                elif field in ("SEC", "반복횟수"):
+                    cell.value = _to_float(row.get(field))
+                else:
+                    cell.value = _normalize_value(row.get(field, ""))
                 cell.border = CELL_BORDER
                 cell.alignment = Alignment(
                     horizontal="left" if field in LEFT_ALIGN_FIELDS else "center",
@@ -243,12 +257,6 @@ def append_assembly_sheet_to_workbook(
                 if row_fill is not None and field in ROW_FILL_FIELDS:
                     cell.fill = row_fill
 
-            sec_value = _to_float(row.get("SEC"))
-            total_value = _to_float(row.get("TOTAL"))
-            if total_value <= 0:
-                total_value = sec_value * _to_float(row.get("반복횟수"))
-            group_sec_total += sec_value
-            group_total += total_value
             current_row += 1
 
         _merge_vertical_runs(
@@ -274,14 +282,14 @@ def append_assembly_sheet_to_workbook(
         summary_label_cell.border = CELL_BORDER
 
         summary_sec_cell = ws.cell(row=current_row, column=field_indexes["SEC"])
-        summary_sec_cell.value = round(group_sec_total, 2)
+        summary_sec_cell.value = f"=SUM({sec_col}{group_start_row}:{sec_col}{current_row - 1})"
         summary_sec_cell.font = Font(bold=True)
         summary_sec_cell.alignment = CENTER
         summary_sec_cell.fill = SUMMARY_FILL
         summary_sec_cell.border = CELL_BORDER
 
         summary_total_cell = ws.cell(row=current_row, column=field_indexes["TOTAL"])
-        summary_total_cell.value = round(group_total, 2)
+        summary_total_cell.value = f"=SUM({total_col}{group_start_row}:{total_col}{current_row - 1})"
         summary_total_cell.font = Font(bold=True)
         summary_total_cell.alignment = CENTER
         summary_total_cell.fill = SUMMARY_FILL
@@ -291,7 +299,44 @@ def append_assembly_sheet_to_workbook(
             ws.cell(row=current_row, column=col_idx).fill = SUMMARY_FILL
             ws.cell(row=current_row, column=col_idx).border = CELL_BORDER
 
+        group_summary_sec_rows.append(current_row)
+        group_summary_total_rows.append(current_row)
         current_row += 1
+
+    summary_label_end_col = max(1, field_indexes["반복횟수"] - 1)
+    ws.merge_cells(
+        start_row=current_row,
+        start_column=1,
+        end_row=current_row,
+        end_column=summary_label_end_col,
+    )
+    total_label_cell = ws.cell(row=current_row, column=1)
+    total_label_cell.value = "전체 합계"
+    total_label_cell.font = Font(bold=True)
+    total_label_cell.alignment = Alignment(horizontal="center", vertical="center")
+    total_label_cell.fill = SUMMARY_FILL
+    total_label_cell.border = CELL_BORDER
+
+    grand_sec_refs = ",".join(f"{sec_col}{r}" for r in group_summary_sec_rows)
+    grand_total_refs = ",".join(f"{total_col}{r}" for r in group_summary_total_rows)
+
+    total_sec_cell = ws.cell(row=current_row, column=field_indexes["SEC"])
+    total_sec_cell.value = f"=SUM({grand_sec_refs})" if grand_sec_refs else 0
+    total_sec_cell.font = Font(bold=True)
+    total_sec_cell.alignment = CENTER
+    total_sec_cell.fill = SUMMARY_FILL
+    total_sec_cell.border = CELL_BORDER
+
+    total_total_cell = ws.cell(row=current_row, column=field_indexes["TOTAL"])
+    total_total_cell.value = f"=SUM({grand_total_refs})" if grand_total_refs else 0
+    total_total_cell.font = Font(bold=True)
+    total_total_cell.alignment = CENTER
+    total_total_cell.fill = SUMMARY_FILL
+    total_total_cell.border = CELL_BORDER
+
+    for col_idx in range(2, last_column):
+        ws.cell(row=current_row, column=col_idx).fill = SUMMARY_FILL
+        ws.cell(row=current_row, column=col_idx).border = CELL_BORDER
 
     widths = {
         "부품 기준": 28,

@@ -62,6 +62,9 @@ function reducer(state, action) {
       return { ...initialState };
 
     case "SET_BOM_CONTEXT":
+      if ((action.payload?.bomId ?? null) === state.bomId) {
+        return state;
+      }
       // bomId가 바뀌면 spec/node/tree는 무조건 초기화하는 게 안전합니다.
       return {
         ...state,
@@ -74,6 +77,12 @@ function reducer(state, action) {
       };
 
     case "SET_SPEC":
+      if (
+        (action.payload?.selectedSpec ?? null) === state.selectedSpec &&
+        (action.payload?.sourceSheet ?? null) === state.sourceSheet
+      ) {
+        return state;
+      }
       return {
         ...state,
         selectedSpec: action.payload?.selectedSpec ?? null,

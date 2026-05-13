@@ -4,6 +4,7 @@
 // - type에 따라 API 분기
 
 import React, { useMemo, useEffect, useState, useRef } from "react";
+import { showPopup } from "../../template/popupUtils";
 
 const API_BASE = "http://localhost:8000";
 
@@ -27,7 +28,7 @@ function serializeSequenceEdge(edge) {
     id: edge.id,
     source: edge.source,
     target: edge.target,
-    type: edge.type || "smoothstep",
+    type: "straight",
     sourceHandle: edge.sourceHandle ?? "out",
     targetHandle: edge.targetHandle ?? "in",
     data: edge.data || {},
@@ -39,6 +40,9 @@ function serializeSequenceGroup(group) {
     id: group.id,
     label: group.label || "",
     nodeIds: Array.isArray(group.nodeIds) ? group.nodeIds : [],
+    skippedAutoEdgeIds: Array.isArray(group.skippedAutoEdgeIds)
+      ? group.skippedAutoEdgeIds
+      : [],
   };
 }
 
@@ -48,7 +52,8 @@ function normalizeRepeatWeightValue(value) {
     return 1;
   }
 
-  return Math.max(1, Math.round(numericValue * 10) / 10);
+  const rounded = Math.max(0, Math.round(numericValue * 100) / 100);
+  return Number.isInteger(rounded) ? Math.trunc(rounded) : rounded;
 }
 
 function formatRepeatWeightInput(value) {
@@ -89,8 +94,15 @@ export default function SequenceInspector({
     [workerGroups, selectedNodeId]
   );
   const selectedNodeType = selectedNode?.type || "";
-  const selectedNodePartBase = selectedNode?.data?.partBase || "";
+  const selectedNodePartBase =
+    selectedNode?.type === "PART"
+      ? selectedNode?.data?.displayLabel || selectedNode?.data?.partBase || ""
+      : selectedNode?.data?.partBase || "";
   const selectedNodeSourceSheet = selectedNode?.data?.sourceSheet || "";
+  const selectedNodeLabel =
+    selectedNode?.data?.operationLabel ||
+    selectedNode?.data?.label ||
+    "";
   const [repeatWeightInput, setRepeatWeightInput] = useState("1");
 
   /* =========================
@@ -246,6 +258,7 @@ export default function SequenceInspector({
     const type = selectedNodeType;
     const partBase = selectedNodePartBase;
     const sourceSheet = selectedNodeSourceSheet;
+    const processLabel = selectedNodeLabel;
     if (!partBase) {
       setOptions([]);
       setOptionLoading(false);
@@ -255,10 +268,16 @@ export default function SequenceInspector({
 
     const nodeId = selectedNodeId;
     const normalizedSourceSheet = String(sourceSheet || "").trim();
-    const requestKey = `${type}:${partBase}:${normalizedSourceSheet || "*"}`;
+    const normalizedProcessLabel =
+      type === "PROCESS" && String(processLabel || "").trim() !== String(partBase || "").trim()
+        ? String(processLabel || "").trim()
+        : "";
+    const requestKey = `${type}:${partBase}:${normalizedSourceSheet || "*"}:${normalizedProcessLabel || "*"}`;
 
     if (optionCache[nodeId]) {
       setOptions(optionCache[nodeId]);
+      setOptionLoading(false);
+      setOptionError(null);
       return;
     }
 
@@ -269,6 +288,8 @@ export default function SequenceInspector({
         [nodeId]: cachedOptions,
       }));
       setOptions(cachedOptions);
+      setOptionLoading(false);
+      setOptionError(null);
       return;
     }
 
@@ -279,12 +300,17 @@ export default function SequenceInspector({
 
     setOptionLoading(true);
     setOptionError(null);
+    let cancelled = false;
 
     const pendingRequest = inFlightOptionRequestsRef.current[requestKey];
     const requestPromise =
       pendingRequest ||
       fetch(
         `${API_BASE}${endpoint}?partBase=${encodeURIComponent(partBase)}${
+          type === "PROCESS" && normalizedProcessLabel
+            ? `&processLabel=${encodeURIComponent(normalizedProcessLabel)}`
+            : ""
+        }${
           normalizedSourceSheet
             ? `&sourceSheet=${encodeURIComponent(normalizedSourceSheet)}`
             : ""
@@ -305,6 +331,9 @@ export default function SequenceInspector({
 
     requestPromise
       .then((data) => {
+        if (cancelled) {
+          return;
+        }
         const opts = data.options || [];
 
         setOptionCache((prev) => ({
@@ -319,17 +348,28 @@ export default function SequenceInspector({
         setOptions(opts);
       })
       .catch((err) => {
+        if (cancelled) {
+          return;
+        }
         console.error(err);
         setOptions([]);
         setOptionError(err.message);
       })
       .finally(() => {
+        if (cancelled) {
+          return;
+        }
         setOptionLoading(false);
       });
+
+    return () => {
+      cancelled = true;
+    };
   }, [
     optionCache,
     optionQueryCache,
     selectedNodeId,
+    selectedNodeLabel,
     selectedNodePartBase,
     selectedNodeSourceSheet,
     selectedNodeType,
@@ -337,7 +377,7 @@ export default function SequenceInspector({
 
   const loadSequence = async () => {
     if (!bomId || !spec) {
-      alert("bomId / spec 없음");
+      showPopup("bomId / spec 없음", "warning");
       return;
     }
   
@@ -397,10 +437,10 @@ export default function SequenceInspector({
         })
       );
   
-      alert("시퀀스 불러오기 완료");
+      showPopup("시퀀스 불러오기 완료", "success");
     } catch (e) {
       console.error(e);
-      alert("불러오기 실패");
+      showPopup("불러오기 실패", "error");
     }
   };
   
@@ -511,7 +551,7 @@ export default function SequenceInspector({
                 <Label>반복 횟수 가중치</Label>
                 <input
                   type="number"
-                  min={1}
+                  min={0}
                   step={0.1}
                   style={inputStyle}
                   value={repeatWeightInput}

@@ -1,20 +1,29 @@
-import React from "react";
+import React, { useRef, useState } from "react";
 import { Handle, Position } from "@xyflow/react";
+import NodeActionTooltip from "./NodeActionTooltip";
 
 export default function ProcessNode({ data, selected }) {
   const {
-    label,        // 공정명
-    partBase,     // fallback
-    sourceSheet,  // 공통 DB / 표준 동작
+    label,
+    operationLabel,
+    partBase,
+    contextPartBase,
+    sourceSheet,
     isAssemblyImported,
   } = data;
 
-  const processName = label || partBase || "공정";
+  const baseName = partBase || contextPartBase || "부품 기준 없음";
+  const processName = operationLabel || label || partBase || "공정";
   const isOptionMissing = !String(data.option || "").trim();
   const handleColor = isAssemblyImported ? "#8b5cf6" : "#fb923c";
+  const [hovered, setHovered] = useState(false);
+  const rootRef = useRef(null);
 
   return (
     <div
+      ref={rootRef}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       style={{
         width: 200,
         minHeight: 80,
@@ -38,6 +47,7 @@ export default function ProcessNode({ data, selected }) {
           : "0 1px 3px rgba(0,0,0,0.1)",
         fontSize: 12,
         position: "relative",
+        overflow: "visible",
       }}
     >
       {/* Header */}
@@ -93,9 +103,9 @@ export default function ProcessNode({ data, selected }) {
             overflow: "hidden",
             textOverflow: "ellipsis",
           }}
-          title={processName}
+          title={baseName}
         >
-          {processName}
+          {baseName}
         </div>
 
         {isOptionMissing && (
@@ -108,6 +118,22 @@ export default function ProcessNode({ data, selected }) {
             }}
           >
             OPTION 미선택
+          </div>
+        )}
+
+        {processName && processName !== baseName && (
+          <div
+            style={{
+              marginTop: 2,
+              fontSize: 11,
+              color: "#7c2d12",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+            title={processName}
+          >
+            {processName}
           </div>
         )}
       </div>
@@ -126,6 +152,14 @@ export default function ProcessNode({ data, selected }) {
         id="out"
         isConnectable
         style={{ background: handleColor }}
+      />
+
+      <NodeActionTooltip
+        visible={hovered}
+        type="PROCESS"
+        data={data}
+        accentColor={isAssemblyImported ? "#7c3aed" : "#f97316"}
+        anchorRef={rootRef}
       />
     </div>
   );

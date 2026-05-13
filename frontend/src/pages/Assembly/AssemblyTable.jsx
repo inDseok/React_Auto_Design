@@ -23,6 +23,25 @@ const TABLE_COLUMNS = [
 const TABLE_MIN_WIDTH = 1280;
 const MIN_COLUMN_WIDTH = 72;
 
+function formatDecimalCell(value) {
+  if (value === "" || value === null || value === undefined) return "";
+  const num = Number(value);
+  if (!Number.isFinite(num)) return value;
+  return num.toFixed(2);
+}
+
+function roundToStep(value, step) {
+  const precision = String(step).includes(".")
+    ? String(step).split(".")[1].length
+    : 0;
+  return Number(value.toFixed(precision));
+}
+
+function stopWheelScroll(event) {
+  event.preventDefault();
+  event.stopPropagation();
+}
+
 function getInitialColumnWidths() {
   return TABLE_COLUMNS.map((column) => {
     if (typeof column.width === "string" && column.width.endsWith("%")) {
@@ -354,6 +373,17 @@ export default function AssemblyTable({
       step={step}
       min={min}
       onChange={(e) => onCellChange(row.id, col, e.target.value)}
+      onWheelCapture={stopWheelScroll}
+      onWheel={(e) => {
+        stopWheelScroll(e);
+        const stepValue = Number(step) || 1;
+        const minValue = min === undefined ? Number.NEGATIVE_INFINITY : Number(min);
+        const currentValue = Number(row[col] ?? "");
+        const baseValue = Number.isFinite(currentValue) ? currentValue : 0;
+        const delta = e.deltaY < 0 ? stepValue : -stepValue;
+        const nextValue = Math.max(minValue, roundToStep(baseValue + delta, stepValue));
+        onCellChange(row.id, col, String(nextValue));
+      }}
       style={{
         width: "100%",
         boxSizing: "border-box",
@@ -368,12 +398,32 @@ export default function AssemblyTable({
     />
   );
 
-  const renderDecimalInput = (row, col) => (
+  const renderDecimalInput = (row, col, { enableWheelAdjust = false } = {}) => (
     <input
       type="text"
       inputMode="decimal"
       value={row[col] ?? ""}
       onChange={(e) => onCellChange(row.id, col, e.target.value)}
+      onWheelCapture={stopWheelScroll}
+      onWheel={(e) => {
+        stopWheelScroll(e);
+        if (!enableWheelAdjust) {
+          return;
+        }
+        const currentValue = Number(row[col] ?? "");
+        if (!Number.isFinite(currentValue)) {
+          return;
+        }
+        const delta = e.deltaY < 0 ? 0.1 : -0.1;
+        const nextValue = formatDecimalCell(currentValue + delta);
+        onCellChange(row.id, col, nextValue);
+      }}
+      onBlur={(e) => {
+        const formatted = formatDecimalCell(e.target.value);
+        if ((row[col] ?? "") !== formatted) {
+          onCellChange(row.id, col, formatted);
+        }
+      }}
       style={{
         width: "100%",
         boxSizing: "border-box",
@@ -384,6 +434,30 @@ export default function AssemblyTable({
         fontSize: 13.5,
         lineHeight: "20px",
         minHeight: 28,
+      }}
+    />
+  );
+
+  const renderReadonlyDecimalInput = (row, col) => (
+    <input
+      type="text"
+      inputMode="decimal"
+      value={row[col] ?? ""}
+      readOnly
+      onWheelCapture={stopWheelScroll}
+      onWheel={stopWheelScroll}
+      style={{
+        width: "100%",
+        boxSizing: "border-box",
+        border: "1px solid transparent",
+        outline: "none",
+        background: "#f8fafc",
+        padding: "6px 6px",
+        fontSize: 13.5,
+        lineHeight: "20px",
+        minHeight: 28,
+        color: "#526071",
+        cursor: "default",
       }}
     />
   );
@@ -646,7 +720,25 @@ export default function AssemblyTable({
                               ...(getNoCellHighlight(row["no"]) || {}),
                             }}
                           >
-                            {renderTextarea(row, "no")}
+                            <select
+                              value={row["no"] ?? ""}
+                              onChange={(e) => onCellChange(row.id, "no", e.target.value)}
+                              style={{
+                                width: "100%",
+                                border: "none",
+                                outline: "none",
+                                background: "transparent",
+                                padding: "6px 4px",
+                                fontSize: 13.5,
+                                cursor: "pointer",
+                                appearance: "none",
+                                textAlign: "center",
+                              }}
+                            >
+                              <option value="낭비">낭비</option>
+                              <option value="필비">필비</option>
+                              <option value="가치">가치</option>
+                            </select>
                           </td>
                           <td style={cellStyle()}>
                             {renderTextarea(row, "동작요소")}
@@ -655,10 +747,10 @@ export default function AssemblyTable({
                             {renderNumberInput(row, "반복횟수")}
                           </td>
                           <td style={cellStyle()}>
-                            {renderDecimalInput(row, "SEC")}
+                            {renderDecimalInput(row, "SEC", { enableWheelAdjust: true })}
                           </td>
                           <td style={cellStyle()}>
-                            {renderDecimalInput(row, "TOTAL")}
+                            {renderReadonlyDecimalInput(row, "TOTAL")}
                           </td>
                         </tr>
                       ))}

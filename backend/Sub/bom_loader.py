@@ -4,8 +4,6 @@ from io import BytesIO
 from typing import List, Dict
 from openpyxl import load_workbook
 from uuid import uuid4
-import os
-
 # ✅ 기존 BOM 파서에서 함수 import
 from backend.Sub.BOM_to_Tree import (수량_병합셀_탐색, 수량병합해제_및_사양컬럼_비활성화,사양명_생성)
 

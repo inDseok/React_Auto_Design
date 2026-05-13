@@ -19,7 +19,18 @@ def find_node_by_id(node, target_id):
 def load_tree_json(root_dir, spec) -> SubTree:
     path = root_dir / f"{spec}.json"
     if not path.exists():
-        raise FileNotFoundError(path)
+        cache_path = root_dir / "tree_specs_cache.json"
+        if not cache_path.exists():
+            raise FileNotFoundError(path)
+
+        cache_payload = json.loads(cache_path.read_text(encoding="utf-8"))
+        raw_tree = cache_payload.get(spec)
+        if not raw_tree:
+            raise FileNotFoundError(path)
+
+        tree = SubTree.model_validate(raw_tree)
+        save_tree_json(root_dir, spec, tree)
+        return tree
 
     cache_key = str(path.resolve())
     mtime = path.stat().st_mtime
@@ -38,6 +49,7 @@ def load_tree_json(root_dir, spec) -> SubTree:
 
 
 def save_tree_json(root_dir: Path, spec: str, tree: SubTree):
+    root_dir.mkdir(parents=True, exist_ok=True)
     path = root_dir / f"{spec}.json"
     payload = tree.model_dump_json(indent=2, ensure_ascii=False)
     path.write_text(payload, encoding="utf-8")

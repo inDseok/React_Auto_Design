@@ -25,6 +25,7 @@ export function insertSameGroupRow(rows, targetRowId) {
     "TOTAL": "",
 
     __groupKey: target.__groupKey,
+    __partInstanceKey: target.__partInstanceKey,
     __isNew: false,
   };
 
@@ -84,7 +85,8 @@ function formatRepeatCountCell(value) {
   if (value === "" || value === null || value === undefined) return "";
   const num = Number(value);
   if (!Number.isFinite(num)) return value;
-  return num.toFixed(1);
+  const rounded = Math.round(num * 100) / 100;
+  return Number.isInteger(rounded) ? String(rounded) : String(rounded);
 }
 
 export function deleteRow(rows, targetRowId) {
@@ -159,11 +161,12 @@ export function updateCell(rows, rowId, field, value) {
   return rows.map((row) => {
     if (row.id !== rowId) return row;
 
+    if (field === "TOTAL") {
+      return row;
+    }
+
     const updated = { ...row, [field]: value };
 
-    if (field === "SEC" || field === "TOTAL") {
-      updated[field] = formatDecimalCell(value);
-    }
     if (field === "반복횟수") {
       updated[field] = formatRepeatCountCell(value);
     }

@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import HeaderBar from "./HeaderBar";
 import SidebarNav from "./SidebarNav";
+import GlobalPopup from "./GlobalPopup";
 import "../css/template/Layout.css";
 import SpecSelector from "../pages/Sub/SpecSelector";
 import UploadBom from "../pages/Sub/UploadBom";
@@ -26,6 +27,7 @@ export default function Layout({ children }) {
       </main>
 
       </div>
+      <GlobalPopup />
     </div>
   );
 }

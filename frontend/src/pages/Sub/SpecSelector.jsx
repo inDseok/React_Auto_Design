@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useApp } from "../../state/AppContext";
+import { apiGet } from "../../api/client";
 import { Spin, Button, Alert, Typography, Select, Space, Tag } from "antd";
+import { getDisplaySpecName } from "../Sequence/sequenceEditorUtils";
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -14,6 +16,7 @@ export default function SpecSelector() {
   const [err, setErr] = useState("");
 
   const reqIdRef = useRef(0);
+  const selectedSpecLabel = getDisplaySpecName(state.selectedSpec);
 
   useEffect(() => {
     if (!state.bomId) {
@@ -29,14 +32,7 @@ export default function SpecSelector() {
       setErr("");
 
       try {
-        const res = await fetch(
-          `http://localhost:8000/api/sub/bom/${state.bomId}/specs`,
-          { credentials: "include" }
-        );
-
-        if (!res.ok) throw new Error(await res.text());
-
-        const data = await res.json();
+        const data = await apiGet(`/api/sub/bom/${state.bomId}/specs`);
 
         if (reqId !== reqIdRef.current) return;
 
@@ -62,18 +58,9 @@ export default function SpecSelector() {
 
     try {
       if (!Array.isArray(cached?.nodes)) {
-        const res = await fetch(
-          `http://localhost:8000/api/sub/bom/${state.bomId}/tree?spec=${encodeURIComponent(
-            selected
-          )}`,
-          { credentials: "include" }
+        const data = await apiGet(
+          `/api/sub/bom/${state.bomId}/tree?spec=${encodeURIComponent(selected)}`
         );
-
-        if (!res.ok) {
-          throw new Error(await res.text());
-        }
-
-        const data = await res.json();
         actions.setTreeCacheEntry?.(cacheKey, {
           nodes: data.nodes ?? [],
         });
@@ -91,7 +78,7 @@ export default function SpecSelector() {
   if (!state.bomId) {
     return (
       <Alert
-        message="BOM을 먼저 업로드하세요."
+        title="BOM을 먼저 업로드하세요."
         type="info"
         showIcon
         style={{ marginBottom: 12 }}
@@ -114,13 +101,13 @@ export default function SpecSelector() {
         <div>
           <div style={{ fontSize: 16, fontWeight: 700, color: "#102a43" }}>사양 선택</div>
         </div>
-        {state.selectedSpec && <Tag color="blue">{state.selectedSpec}</Tag>}
+        {selectedSpecLabel && <Tag color="blue">{selectedSpecLabel}</Tag>}
       </div>
 
       {err && (
         <Alert
           type="error"
-          message="사양 불러오기 실패"
+          title="사양 불러오기 실패"
           description={err}
           showIcon
           style={{ marginBottom: 10 }}
@@ -138,11 +125,13 @@ export default function SpecSelector() {
             style={{ width: "100%" }}
             size="large"
           >
-            {specs.map((s) => (
-              <Option key={s} value={s}>
-                {s}
-              </Option>
-            ))}
+            {specs
+              .filter((s) => getDisplaySpecName(s))
+              .map((s) => (
+                <Option key={s} value={s}>
+                  {getDisplaySpecName(s)}
+                </Option>
+              ))}
           </Select>
 
           <Button

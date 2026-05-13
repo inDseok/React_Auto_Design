@@ -1,0 +1,39 @@
+{
+  "caseId": "case-001",
+  "split": "train",
+  "sourceType": "excel_sequence",
+  "sourcePath": "tmp_sequence_output.json",
+  "bomId": "excel-import",
+  "spec": "Sheet1",
+  "input": {
+    "sourceGroupLabel": "그룹 1",
+    "sourceItems": [
+      {
+        "type": "PART",
+        "label": "PART_NAME",
+        "task": "작업명",
+        "option": "옵션",
+        "worker": "1"
+      }
+    ]
+  },
+  "output": {
+    "groupLabel": "그룹 1",
+    "sequence": [
+      {
+        "type": "PART",
+        "nodeName": "PART_NAME",
+        "reason": "기준 부품"
+      },
+      {
+        "type": "PROCESS",
+        "processKey": "PROCESS_KEY",
+        "reason": "삽입 공정"
+      }
+    ]
+  },
+  "notes": [
+    "This template is for sequence-order learning only.",
+    "Review sourceItems and output.sequence together."
+  ]
+}

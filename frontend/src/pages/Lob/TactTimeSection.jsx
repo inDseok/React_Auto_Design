@@ -99,7 +99,7 @@ export function TactTimeSection({ inputs, onChange }) {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+          gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
           gap: 14,
         }}
       >
@@ -151,7 +151,7 @@ export function TactTimeSection({ inputs, onChange }) {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+          gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
           gap: 14,
         }}
       >

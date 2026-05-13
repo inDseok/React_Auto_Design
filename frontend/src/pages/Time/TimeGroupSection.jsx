@@ -42,6 +42,16 @@ function cellStyle(emphasis = false) {
   };
 }
 
+function formatRepeatCount(value) {
+  const raw = value ?? 1;
+  const numericValue = Number(raw);
+  if (!Number.isFinite(numericValue)) {
+    return raw;
+  }
+  const rounded = Math.round(numericValue * 100) / 100;
+  return Number.isInteger(rounded) ? String(rounded) : String(rounded);
+}
+
 export default function TimeGroupSection({
   groupKey,
   groupRows,
@@ -117,7 +127,7 @@ export default function TimeGroupSection({
               </td>
               <td style={cellStyle()}>{row["동작요소"] || "-"}</td>
               <td style={cellStyle()}>
-                {row["반복횟수"] ?? row.repeatWeight ?? row["repeatWeight"] ?? 1}
+                {formatRepeatCount(row["반복횟수"] ?? row.repeatWeight ?? row["repeatWeight"] ?? 1)}
               </td>
               <td style={cellStyle()}>{row["SEC"] || "-"}</td>
               <td style={cellStyle()}>{row["TOTAL"] || "-"}</td>

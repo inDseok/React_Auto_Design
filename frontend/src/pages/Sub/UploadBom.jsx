@@ -96,7 +96,7 @@ export default function UploadBom() {
         {err && (
           <Alert
             type="error"
-            message="업로드 오류"
+            title="업로드 오류"
             description={err}
             showIcon
             style={{ marginTop: 12 }}

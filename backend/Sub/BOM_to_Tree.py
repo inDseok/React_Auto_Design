@@ -1314,6 +1314,124 @@ def 단일시트_사양트리_생성(ws):
     return 사양별_트리
 
 
+def 단일시트_사양트리_생성_및_메타(ws):
+    시트명 = ws.title.strip()
+    최대행 = ws.max_row
+    최대열 = ws.max_column
+
+    수량행, 수량_왼쪽열, 수량_오른열, 헤더깊이 = 수량_병합셀_탐색(ws)
+
+    수량_왼쪽열, 수량_오른열, 사양컬럼_활성화 = 수량병합해제_및_사양컬럼_비활성화(
+        ws, 수량행, 수량_왼쪽열, 수량_오른열
+    )
+
+    사양목록 = 사양명_생성(
+        ws,
+        시트명,
+        수량행,
+        수량_왼쪽열,
+        수량_오른열,
+        헤더깊이,
+        사양컬럼_활성화
+    )
+
+    조립단위행, 조립단위_왼쪽열, 조립단위_오른열 = 조립단위_병합셀_탐색(ws)
+
+    데이터시작행, 데이터끝행 = 데이터구간_탐색_스타기반(
+        ws,
+        조립단위행,
+        조립단위_왼쪽열,
+        조립단위_오른열,
+        최대행,
+        허용_공백_연속수=30
+    )
+
+    품명열 = 품명열_탐색(ws, 최대행, 최대열)
+    품번열 = 품번열_탐색(ws, 최대행, 최대열)
+    재질열 = 재질열_탐색(ws, 최대행, 최대열)
+
+    노드목록 = 조립노드_파싱(
+        ws,
+        데이터시작행,
+        최대행,
+        조립단위_왼쪽열,
+        조립단위_오른열,
+        품명열,
+        품번열,
+        재질열
+    )
+
+    사양별_수량 = 사양별_수량_매핑(ws, 사양목록, 노드목록)
+    보기용 = 사양별_수량_보기용_변환(사양별_수량)
+    사양별_트리 = 사양별_BOM_트리_생성(보기용)
+
+    return {
+        "sheet": 시트명,
+        "specs": [
+            {"col": col, "spec_name": spec_name}
+            for col, spec_name in 사양목록
+        ],
+        "spec_trees": 사양별_트리,
+    }
+
+
+def run_bom_to_tree(원본파일_경로, 결과파일_경로=None, 선택사양값=None, 선택시트목록=None, save_output=True):
+    원본파일_xlsx = 변환_xls_to_xlsx_안전(원본파일_경로)
+
+    wb = openpyxl.load_workbook(원본파일_xlsx, data_only=True)
+    결과통합문서 = 결과파일_초기화() if save_output else None
+    전체_사양별_트리 = {}
+    spec_info_sheets = []
+
+    for ws in wb.worksheets:
+        if 선택시트목록 and ws.title not in 선택시트목록:
+            continue
+
+        parsed = 단일시트_사양트리_생성_및_메타(ws)
+        if parsed.get("specs"):
+            spec_info_sheets.append(
+                {
+                    "sheet": parsed["sheet"],
+                    "specs": parsed["specs"],
+                }
+            )
+        사양별_트리 = parsed["spec_trees"]
+        if 선택사양값:
+            사양별_트리 = {
+                사양명: 트리
+                for 사양명, 트리 in 사양별_트리.items()
+                if 사양명 == 선택사양값
+            }
+        전체_사양별_트리.update(사양별_트리)
+
+    if save_output:
+        사양별_시트_생성_및_도식화(
+            결과통합문서,
+            전체_사양별_트리,
+            셀너비,
+            두꺼운테두리,
+            도식화_시작행,
+            도식화_시작열
+        )
+
+        트리_연결선_전체_그리기(
+            결과통합문서,
+            전체_사양별_트리
+        )
+
+        결과파일_저장(
+            결과통합문서,
+            결과파일_경로
+        )
+
+    return {
+        "source_xlsx_path": 원본파일_xlsx,
+        "output_path": 결과파일_경로,
+        "spec_trees": 전체_사양별_트리,
+        "spec_info": {"sheets": spec_info_sheets},
+    }
+
+
 
 
 
@@ -1333,48 +1451,4 @@ if __name__ == "__main__":
     else:
         선택사양 = None
 
-    # [0-1] xls → xlsx 변환
-    원본파일_xlsx = 변환_xls_to_xlsx_안전(원본파일)
-    
-    print("[DEBUG] sys.argv =", sys.argv)
-    print("[DEBUG] 원본파일 =", 원본파일)
-    print("[DEBUG] 원본파일_xlsx =", 원본파일_xlsx)
-
-    # [1] openpyxl 로드
-    wb = openpyxl.load_workbook(원본파일_xlsx, data_only=True)
-
-    결과통합문서 = 결과파일_초기화()
-
-    전체_사양별_트리 = {}
-
-    # ✅ 여기서 시트 선택 가능
-    선택시트 = None          
-
-    for ws in wb.worksheets:
-        if 선택시트 and ws.title not in 선택시트:
-            continue
-
-        사양별_트리 = 단일시트_사양트리_생성(ws)
-        전체_사양별_트리.update(사양별_트리)
-
-    # [13]
-    사양별_시트_생성_및_도식화(
-        결과통합문서,
-        전체_사양별_트리,
-        셀너비,
-        두꺼운테두리,
-        도식화_시작행,
-        도식화_시작열
-    )
-
-    # [14]
-    트리_연결선_전체_그리기(
-        결과통합문서,
-        전체_사양별_트리
-    )
-
-    # [15]
-    결과파일_저장(
-        결과통합문서,
-        결과파일
-    )
+    run_bom_to_tree(원본파일, 결과파일, 선택사양)

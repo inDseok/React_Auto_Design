@@ -1,13 +1,20 @@
-import React from "react";
+import React, { useRef, useState } from "react";
 import { Handle, Position } from "@xyflow/react";
+import NodeActionTooltip from "./NodeActionTooltip";
 
 export default function PartNode({ data, selected }) {
   const { inhouse, statusLabel, isAssemblyImported } = data;
+  const visibleLabel = data.displayLabel ?? data.partBase ?? data.partId;
   const isOptionMissing = !String(data.option || "").trim();
   const handleColor = isAssemblyImported ? "#0f766e" : "#2563eb";
+  const [hovered, setHovered] = useState(false);
+  const rootRef = useRef(null);
 
   return (
     <div
+      ref={rootRef}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       style={{
         width: 180,
         height: 80,
@@ -31,6 +38,7 @@ export default function PartNode({ data, selected }) {
           : "0 1px 3px rgba(0,0,0,0.1)",
         fontSize: 12,
         position: "relative",
+        overflow: "visible",
       }}
     >
       {/* Header */}
@@ -88,9 +96,9 @@ export default function PartNode({ data, selected }) {
             overflow: "hidden",
             textOverflow: "ellipsis",
           }}
-          title={data.partBase ?? data.partId}
+          title={visibleLabel}
         >
-          {data.partBase ?? data.partId}
+          {visibleLabel}
         </div>
 
         {isOptionMissing && (
@@ -137,6 +145,14 @@ export default function PartNode({ data, selected }) {
         id="out"
         isConnectable
         style={{ background: handleColor }}
+      />
+
+      <NodeActionTooltip
+        visible={hovered}
+        type="PART"
+        data={data}
+        accentColor={isAssemblyImported ? "#0f766e" : "#2563eb"}
+        anchorRef={rootRef}
       />
     </div>
   );

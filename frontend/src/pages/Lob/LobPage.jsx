@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useApp } from "../../state/AppContext";
 import { useAssemblyData } from "../Assembly/useAssemblyData";
+import { getDisplaySpecName } from "../Sequence/sequenceEditorUtils";
 import { EquipmentStackedBarChart, VerticalBarChart } from "./LobCharts";
 import { ProcessDesignTable } from "./ProcessDesignTable";
 import { SummaryCard } from "./LobSummaryCards";
@@ -18,6 +19,7 @@ import {
 } from "./lobUtils";
 
 const TACT_STORAGE_KEY = "lob_tact_inputs_v1";
+const EQUIPMENT_STORAGE_KEY = "lob_equipment_rows_v1";
 
 const VIEW_OPTIONS = [
   { key: "tact", label: "Tact time 분석" },
@@ -117,6 +119,84 @@ function loadSavedTactState(currentBomId) {
   }
 }
 
+function loadSavedEquipmentRows(currentBomId) {
+  try {
+    const raw = localStorage.getItem(EQUIPMENT_STORAGE_KEY);
+    if (!raw) {
+      return [createEquipmentRow()];
+    }
+
+    const parsed = JSON.parse(raw);
+    if (currentBomId && parsed?.bomId !== currentBomId) {
+      return [createEquipmentRow()];
+    }
+
+    return Array.isArray(parsed?.equipmentRows) && parsed.equipmentRows.length
+      ? parsed.equipmentRows
+      : [createEquipmentRow()];
+  } catch {
+    return [createEquipmentRow()];
+  }
+}
+
+function buildProcessDesignMetricsFromRows(rows, tactMetrics, movementTimes = {}) {
+  const workerStats = buildWorkerStats(rows);
+  const summary = buildSummary(workerStats);
+  const workerCount = summary.workers;
+  const totalManualTime = summary.totalTime;
+  const tactTimeSeconds = tactMetrics.lineTactSeconds;
+  const neckTime = workerStats.reduce((max, worker) => {
+    const movementTime = toNumber(movementTimes[worker.worker]);
+    return Math.max(max, worker.totalTime + movementTime);
+  }, 0);
+  const divisor = getExpectedCtDivisor(tactMetrics.annualVehicles);
+  const expectedCycleTime = divisor > 0 ? neckTime / divisor : 0;
+  const efficiencyRatio =
+    neckTime > 0 && expectedCycleTime > 0 ? neckTime / expectedCycleTime : 0;
+  const efficiencyPercent = efficiencyRatio * 100;
+  const standardUph = neckTime > 0 ? 3600 / neckTime : 0;
+  const expectedUph = expectedCycleTime > 0 ? 3600 / expectedCycleTime : 0;
+  const expectedUpmh = workerCount > 0 ? expectedUph / workerCount : 0;
+  const minimumWorkers = tactTimeSeconds > 0 ? totalManualTime / tactTimeSeconds : 0;
+  const workerLaborSums = workerStats.map((worker) =>
+    worker.totalTime + toNumber(movementTimes[worker.worker])
+  );
+  const totalWorkerLaborSum = workerLaborSums.reduce(
+    (sum, laborSum) => sum + laborSum,
+    0
+  );
+  const maxWorkerLaborSum = workerLaborSums.reduce(
+    (max, laborSum) => Math.max(max, laborSum),
+    0
+  );
+  const lobPercent =
+    maxWorkerLaborSum > 0 && workerCount > 0
+      ? (totalWorkerLaborSum / (maxWorkerLaborSum * workerCount)) * 100
+      : 0;
+  const loadHours = expectedUph > 0 ? tactMetrics.dailyRequiredQuantity / expectedUph : 0;
+  const dailyOperatingHours = tactMetrics.realAvailable / 60;
+  const loadRatePercent =
+    dailyOperatingHours > 0 ? (loadHours / dailyOperatingHours) * 100 : 0;
+  const dailyLineCapacity = expectedUph * dailyOperatingHours;
+
+  return {
+    tactTimeSeconds,
+    totalManualTime,
+    minimumWorkers,
+    workerCount,
+    neckTime,
+    expectedCycleTime,
+    efficiencyPercent,
+    standardUph,
+    expectedUph,
+    expectedUpmh,
+    lobPercent,
+    loadHours,
+    loadRatePercent,
+    dailyLineCapacity,
+  };
+}
+
 export default function LobPage() {
   const [params] = useSearchParams();
   const { state, actions } = useApp();
@@ -125,7 +205,9 @@ export default function LobPage() {
   const paramSpec = params.get("spec");
   const bomId = paramBomId || state.bomId;
   const spec = paramSpec || state.selectedSpec;
+  const specLabel = getDisplaySpecName(spec);
   const initialTactState = useMemo(() => loadSavedTactState(bomId), [bomId]);
+  const initialEquipmentRows = useMemo(() => loadSavedEquipmentRows(bomId), [bomId]);
 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -134,7 +216,10 @@ export default function LobPage() {
   const [movementTimeInputs, setMovementTimeInputs] = useState({});
   const [tactInputs, setTactInputs] = useState(initialTactState.tactInputs);
   const [isRealAvailableManual, setIsRealAvailableManual] = useState(initialTactState.isRealAvailableManual);
-  const [equipmentRows, setEquipmentRows] = useState([createEquipmentRow()]);
+  const [equipmentRows, setEquipmentRows] = useState(initialEquipmentRows);
+  const [bomSpecs, setBomSpecs] = useState([]);
+  const [selectedProcessDesignSpec, setSelectedProcessDesignSpec] = useState("");
+  const [processDesignRowsBySpec, setProcessDesignRowsBySpec] = useState({});
   const prevBomIdRef = useRef(bomId);
 
   useEffect(() => {
@@ -161,6 +246,9 @@ export default function LobPage() {
       setMovementTimes({});
       setMovementTimeInputs({});
       setEquipmentRows([createEquipmentRow()]);
+      setBomSpecs([]);
+      setSelectedProcessDesignSpec("");
+      setProcessDesignRowsBySpec({});
     }
 
     prevBomIdRef.current = bomId;
@@ -184,6 +272,84 @@ export default function LobPage() {
 
     load();
   }, [bomId, spec]);
+
+  useEffect(() => {
+    const loadSpecs = async () => {
+      if (!bomId) {
+        setBomSpecs([]);
+        return;
+      }
+
+      try {
+        const res = await fetch(`http://localhost:8000/api/sub/bom/${bomId}/specs`, {
+          credentials: "include",
+        });
+        if (!res.ok) {
+          throw new Error("spec 목록 로딩 실패");
+        }
+
+        const data = await res.json();
+        setBomSpecs(Array.isArray(data) ? data : []);
+      } catch (error) {
+        console.error("load bom specs error:", error);
+        setBomSpecs([]);
+      }
+    };
+
+    loadSpecs();
+  }, [bomId]);
+
+  useEffect(() => {
+    setSelectedProcessDesignSpec((prev) => {
+      if (prev && bomSpecs.includes(prev)) {
+        return prev;
+      }
+      if (spec && bomSpecs.includes(spec)) {
+        return spec;
+      }
+      return bomSpecs[0] ?? "";
+    });
+  }, [bomSpecs, spec]);
+
+  useEffect(() => {
+    const targets = [selectedProcessDesignSpec].filter(Boolean);
+    const unloadedSpecs = targets.filter(
+      (targetSpec) => processDesignRowsBySpec[targetSpec] === undefined
+    );
+
+    if (!bomId || unloadedSpecs.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadProcessDesignRows = async () => {
+      const results = await Promise.all(
+        unloadedSpecs.map(async (targetSpec) => {
+          const loadedRows = await assemblyData.loadSavedRows(bomId, targetSpec);
+          return [targetSpec, loadedRows];
+        })
+      );
+
+      if (cancelled) {
+        return;
+      }
+
+      setProcessDesignRowsBySpec((prev) => {
+        const next = { ...prev };
+        results.forEach(([targetSpec, loadedRows]) => {
+          next[targetSpec] = loadedRows;
+        });
+        return next;
+      });
+    };
+
+    loadProcessDesignRows();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [assemblyData, bomId, processDesignRowsBySpec, selectedProcessDesignSpec]);
 
   const workerStats = useMemo(() => buildWorkerStats(rows), [rows]);
   const summary = useMemo(() => buildSummary(workerStats), [workerStats]);
@@ -250,57 +416,23 @@ export default function LobPage() {
       }),
     [equipmentRows]
   );
-  const processDesignMetrics = useMemo(() => {
-    const workerCount = summary.workers;
-    const totalManualTime = summary.totalTime;
-    const tactTimeSeconds = tactMetrics.lineTactSeconds;
-    const neckTime = workerTopMetrics.neckTime;
-    const expectedCycleTime = workerTopMetrics.expectedCt;
-    const efficiencyRatio =
-      neckTime > 0 && expectedCycleTime > 0 ? neckTime / expectedCycleTime : 0;
-    const efficiencyPercent = efficiencyRatio * 100;
-    const standardUph = neckTime > 0 ? 3600 / neckTime : 0;
-    const expectedUph = expectedCycleTime > 0 ? 3600 / expectedCycleTime : 0;
-    const expectedUpmh = workerCount > 0 ? expectedUph / workerCount : 0;
-    const minimumWorkers = tactTimeSeconds > 0 ? totalManualTime / tactTimeSeconds : 0;
-    const workerLaborSums = workerStats.map((worker) =>
-      worker.totalTime + toNumber(movementTimes[worker.worker])
+  const processDesignMetrics = useMemo(
+    () => buildProcessDesignMetricsFromRows(rows, tactMetrics, movementTimes),
+    [movementTimes, rows, tactMetrics]
+  );
+  const selectedProcessDesignMetrics = useMemo(() => {
+    if (!selectedProcessDesignSpec) {
+      return null;
+    }
+    if (selectedProcessDesignSpec === spec) {
+      return processDesignMetrics;
+    }
+    return buildProcessDesignMetricsFromRows(
+      processDesignRowsBySpec[selectedProcessDesignSpec] ?? [],
+      tactMetrics,
+      {}
     );
-    const totalWorkerLaborSum = workerLaborSums.reduce(
-      (sum, laborSum) => sum + laborSum,
-      0
-    );
-    const maxWorkerLaborSum = workerLaborSums.reduce(
-      (max, laborSum) => Math.max(max, laborSum),
-      0
-    );
-    const lobPercent =
-      maxWorkerLaborSum > 0 && workerCount > 0
-        ? (totalWorkerLaborSum / (maxWorkerLaborSum * workerCount)) * 100
-        : 0;
-    const loadHours = expectedUph > 0 ? tactMetrics.dailyRequiredQuantity / expectedUph : 0;
-    const dailyOperatingHours = tactMetrics.realAvailable / 60;
-    const loadRatePercent =
-      dailyOperatingHours > 0 ? (loadHours / dailyOperatingHours) * 100 : 0;
-    const dailyLineCapacity = expectedUph * dailyOperatingHours;
-
-    return {
-      tactTimeSeconds,
-      totalManualTime,
-      minimumWorkers,
-      workerCount,
-      neckTime,
-      expectedCycleTime,
-      efficiencyPercent,
-      standardUph,
-      expectedUph,
-      expectedUpmh,
-      lobPercent,
-      loadHours,
-      loadRatePercent,
-      dailyLineCapacity,
-    };
-  }, [movementTimes, summary, tactMetrics, workerStats, workerTopMetrics]);
+  }, [processDesignMetrics, processDesignRowsBySpec, selectedProcessDesignSpec, spec, tactMetrics]);
 
   useEffect(() => {
     setMovementTimes((prev) => {
@@ -336,6 +468,16 @@ export default function LobPage() {
       })
     );
   }, [bomId, isRealAvailableManual, tactInputs]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      EQUIPMENT_STORAGE_KEY,
+      JSON.stringify({
+        bomId,
+        equipmentRows,
+      })
+    );
+  }, [bomId, equipmentRows]);
 
   const handleMovementTimeChange = (worker, value) => {
     setMovementTimeInputs((prev) => ({
@@ -434,7 +576,7 @@ export default function LobPage() {
         style={{
           display: "grid",
           gap: 20,
-          maxWidth: 1440,
+          width: "100%",
         }}
       >
         <section
@@ -478,7 +620,7 @@ export default function LobPage() {
             }}
           >
             <span style={infoBadgeStyle}>작업자 수 {summary.workers}명</span>
-            <span style={infoBadgeStyle}>사양 {spec}</span>
+            {specLabel && <span style={infoBadgeStyle}>사양 {specLabel}</span>}
           </div>
         </section>
 
@@ -494,7 +636,7 @@ export default function LobPage() {
           </section>
         ) : activeView === "equipment" ? (
           <>
-            <section style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+            <section style={equipmentSummaryGridStyle}>
               <SummaryCard
                 title="Tact Time"
                 value={formatCardNumber(tactMetrics.lineTactSeconds, 2, " sec")}
@@ -718,10 +860,15 @@ export default function LobPage() {
             />
           </>
         ) : activeView === "process-design" ? (
-          <ProcessDesignTable metrics={processDesignMetrics} />
+          <ProcessDesignTable
+            metrics={selectedProcessDesignMetrics}
+            selectedSpec={selectedProcessDesignSpec}
+            specOptions={bomSpecs}
+            onChangeSpec={setSelectedProcessDesignSpec}
+          />
         ) : (
           <>
-            <section style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+            <section style={workerSummaryGridStyle}>
               <SummaryCard
                 title="Tact Time"
                 value={formatCardNumber(tactMetrics.lineTactSeconds, 2, " sec")}
@@ -755,10 +902,12 @@ export default function LobPage() {
             <VerticalBarChart workerStats={workerStats} movementTimes={movementTimes} maxTime={maxTime} />
 
             <section style={{ display: "grid", gap: 12 }}>
-              <div>
-                <div style={{ fontSize: 24, fontWeight: 700, color: "#102a43" }}>작업자 요약 표</div>
-                <div style={{ color: "#526071", marginTop: 6 }}>
-                  열은 작업자, 행은 가치·필비·낭비·이동시간·공수 합계·실동율로 구성됩니다.
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontSize: 24, fontWeight: 700, color: "#102a43" }}>작업자 요약 표</div>
+                  <div style={{ color: "#526071", marginTop: 6 }}>
+                    열은 작업자, 행은 가치·필비·낭비·이동시간·공수 합계·실동율로 구성됩니다.
+                  </div>
                 </div>
               </div>
               <WorkerTable
@@ -804,6 +953,18 @@ const emptyStateStyle = {
   border: "1px solid #d9e2ec",
   boxShadow: "0 18px 40px rgba(15, 23, 42, 0.08)",
   color: "#334e68",
+};
+
+const workerSummaryGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+  gap: 16,
+};
+
+const equipmentSummaryGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+  gap: 16,
 };
 
 const equipmentCardStyle = {

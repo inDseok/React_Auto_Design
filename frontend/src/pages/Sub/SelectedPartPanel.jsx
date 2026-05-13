@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useApp } from "../../state/AppContext";
 import { apiGet, apiPatch, apiDelete, apiPost } from "../../api/client";
 
@@ -18,9 +18,12 @@ import {
   Tag,
 } from "antd";
 
-export default function SelectedPartPanel({ node, onUpdateNodes }) {
+export default function SelectedPartPanel({ node, onUpdateNodes, onBeforeMutate }) {
   const { state, actions } = useApp();
   const [form] = Form.useForm();
+
+  const nodeRef = useRef(node);
+  useEffect(() => { nodeRef.current = node; }, [node]);
 
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
@@ -41,7 +44,9 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
       material: node.material ?? "",
       qty: node.qty ?? "",
       type: node.type ?? "PART",
-      inhouse: node.inhouse ?? false  
+      inhouse: node.inhouse ?? false,
+      recommended_part_base: node.recommended_part_base ?? null,
+      recommended_source_sheet: node.recommended_source_sheet ?? null,
     });
     setFormValues({
       id: node.id ?? "",
@@ -50,6 +55,8 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
       qty: node.qty ?? "",
       type: node.type ?? "PART",
       inhouse: node.inhouse ?? false,
+      recommended_part_base: node.recommended_part_base ?? null,
+      recommended_source_sheet: node.recommended_source_sheet ?? null,
     });
     setSuggestions([]);
 
@@ -96,14 +103,6 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
     return () => clearTimeout(timer);
   }, [formValues.id, formValues.inhouse, formValues.part_no, node, state.bomId, state.selectedSpec]);
 
-  if (!node) {
-    return (
-      <Card>
-        선택된 부품이 없습니다.
-      </Card>
-    );
-  }
-
   async function onSave(values) {
     if (!state.bomId || !state.selectedSpec) {
       setErr("BOM 또는 사양이 없습니다.");
@@ -112,6 +111,7 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
 
     setSaving(true);
     setErr("");
+    const rollbackUndo = onBeforeMutate?.();
 
     try {
       const payload = {
@@ -141,6 +141,7 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
 
       message.success("저장되었습니다.");
     } catch (e) {
+      rollbackUndo?.();
       setErr(String(e?.message ?? e));
     } finally {
       setSaving(false);
@@ -153,6 +154,8 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
       return;
     }
 
+    const rollbackUndo = onBeforeMutate?.();
+
     try {
       const payload = {
         parent_name: node.id,
@@ -164,7 +167,9 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
       };
 
       const created = await apiPost(
-        `/api/sub/bom/${encodeURIComponent(state.bomId)}/node`,
+        `/api/sub/bom/${encodeURIComponent(state.bomId)}/node?spec=${encodeURIComponent(
+          state.selectedSpec
+        )}`,
         payload
       );
 
@@ -173,6 +178,7 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
 
       message.success("하위 부품이 추가되었습니다.");
     } catch (e) {
+      rollbackUndo?.();
       setErr(String(e?.message ?? e));
     }
   }
@@ -185,6 +191,7 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
 
     setSaving(true);
     setErr("");
+    const rollbackUndo = onBeforeMutate?.();
 
     try {
       const deletedTree = await apiDelete(
@@ -202,6 +209,7 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
       actions.setSelectedNode(null);
       message.success("삭제되었습니다.");
     } catch (e) {
+      rollbackUndo?.();
       setErr(String(e?.message ?? e));
     } finally {
       setSaving(false);
@@ -212,10 +220,36 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
     actions.setSelectedNode(null);
   }
 
+  async function handleClearRecommendation() {
+    if (!state.bomId || !state.selectedSpec || !node) return;
+    const rollbackUndo = onBeforeMutate?.();
+    try {
+      setSaving(true);
+      const payload = { recommended_part_base: null, recommended_source_sheet: null, recommended_match_score: null };
+      const updatedTree = await apiPatch(
+        `/api/sub/bom/${encodeURIComponent(state.bomId)}/node/${encodeURIComponent(node.id)}?spec=${encodeURIComponent(state.selectedSpec)}`,
+        payload
+      );
+      onUpdateNodes(updatedTree.nodes);
+      if (nodeRef.current?.id !== node.id) return;
+      form.setFieldsValue(payload);
+      setFormValues((prev) => ({ ...prev, ...payload }));
+      message.success("적용이 해제되었습니다.");
+    } catch (e) {
+      rollbackUndo?.();
+      setErr(String(e?.message ?? e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function handleApplySuggestion(item) {
     if (!state.bomId || !state.selectedSpec || !node) {
       return;
     }
+
+    const targetNodeId = node.id;
+    const rollbackUndo = onBeforeMutate?.();
 
     try {
       setSaving(true);
@@ -240,10 +274,12 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
       );
 
       onUpdateNodes(updatedTree.nodes);
+      if (nodeRef.current?.id !== targetNodeId) return;
       form.setFieldsValue(payload);
       setFormValues((prev) => ({ ...prev, ...payload }));
       message.success("시퀀스 추천 부품으로 반영되었습니다.");
     } catch (e) {
+      rollbackUndo?.();
       setErr(String(e?.message ?? e));
     } finally {
       setSaving(false);
@@ -259,7 +295,7 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
       {err && (
         <Alert
           type="error"
-          message={err}
+          title={err}
           style={{ marginBottom: 12 }}
           showIcon
         />
@@ -315,15 +351,35 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
               <Input />
             </Form.Item>
 
-            {node.recommended_part_base && (
-              <Alert
-                type="info"
-                showIcon
-                style={{ marginBottom: 16 }}
-                message={`시퀀스 추천 부품: ${node.recommended_part_base}`}
-                description={`추천 시트: ${node.recommended_source_sheet || "-"}`}
-              />
-            )}
+            {formValues.inhouse && (() => {
+              const manualPart = formValues.recommended_part_base || node?.recommended_part_base;
+              const autoMatch = !manualPart && suggestions.find(s => s.score_combined >= 90);
+              if (manualPart) {
+                return (
+                  <div style={{ marginBottom: 16, padding: "8px 12px", borderRadius: 6, background: "#f0f9ff", border: "1px solid #bae0ff" }}>
+                    <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4 }}>시퀀스 구성 페이지에 표시되는 부품 <span style={{ color: "#2563eb" }}>· 수동 지정</span></div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <div style={{ fontWeight: 600, color: "#0369a1", flex: 1 }}>{manualPart}</div>
+                      <Button size="small" danger onClick={handleClearRecommendation}>적용 해제</Button>
+                    </div>
+                  </div>
+                );
+              }
+              if (autoMatch) {
+                return (
+                  <div style={{ marginBottom: 16, padding: "8px 12px", borderRadius: 6, background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
+                    <div style={{ fontSize: 11, color: "#64748b", marginBottom: 2 }}>시퀀스 구성 페이지에 표시되는 부품 <span style={{ color: "#16a34a" }}>· 자동 매칭 ({autoMatch.score_combined}점)</span></div>
+                    <div style={{ fontWeight: 600, color: "#15803d" }}>{autoMatch.db_part_raw}</div>
+                  </div>
+                );
+              }
+              return (
+                <div style={{ marginBottom: 16, padding: "8px 12px", borderRadius: 6, background: "#fafafa", border: "1px solid #e2e8f0" }}>
+                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 2 }}>시퀀스 구성 페이지에 표시되는 부품</div>
+                  <div style={{ color: "#94a3b8" }}>없음 — DB 추천에서 적용하거나 유사도 90점 이상 부품이 있으면 자동 표시됩니다</div>
+                </div>
+              );
+            })()}
 
             {formValues.inhouse && (
               <Card
@@ -340,35 +396,44 @@ export default function SelectedPartPanel({ node, onUpdateNodes }) {
                   <List
                     size="small"
                     dataSource={suggestions}
-                    renderItem={(item) => (
-                      <List.Item
-                        actions={[
-                          <Button
-                            key="apply"
-                            size="small"
-                            onClick={() => handleApplySuggestion(item)}
-                          >
-                            적용
-                          </Button>,
-                        ]}
-                      >
-                        <List.Item.Meta
-                          title={
-                            <Space wrap>
-                              <span>{item.db_part_raw}</span>
-                              <Tag color="blue">{item.sheet}</Tag>
-                            </Space>
-                          }
-                          description={
-                            <Space wrap size={[8, 4]}>
-                              <span>종합 {item.score_combined}</span>
-                              <span>JW {item.score_jaro_winkler}</span>
-                              <span>RF {item.score_rapidfuzz}</span>
-                            </Space>
-                          }
-                        />
-                      </List.Item>
-                    )}
+                    renderItem={(item) => {
+                      const activePartBase = formValues.recommended_part_base || node?.recommended_part_base;
+                      const isActive = activePartBase && item.db_part_raw === activePartBase;
+                      return (
+                        <List.Item
+                          style={isActive ? { background: "#fffbe6", borderRadius: 6, padding: "4px 8px" } : undefined}
+                          actions={[
+                            isActive ? (
+                              <Tag key="active" color="gold" style={{ margin: 0 }}>시퀀스에 표시됨</Tag>
+                            ) : (
+                              <Button
+                                key="apply"
+                                size="small"
+                                onClick={() => handleApplySuggestion(item)}
+                              >
+                                적용
+                              </Button>
+                            ),
+                          ]}
+                        >
+                          <List.Item.Meta
+                            title={
+                              <Space wrap>
+                                <span style={isActive ? { fontWeight: 600 } : undefined}>{item.db_part_raw}</span>
+                                <Tag color="blue">{item.sheet}</Tag>
+                              </Space>
+                            }
+                            description={
+                              <Space wrap size={[8, 4]}>
+                                <span>종합 {item.score_combined}</span>
+                                <span>JW {item.score_jaro_winkler}</span>
+                                <span>RF {item.score_rapidfuzz}</span>
+                              </Space>
+                            }
+                          />
+                        </List.Item>
+                      );
+                    }}
                   />
                 )}
               </Card>

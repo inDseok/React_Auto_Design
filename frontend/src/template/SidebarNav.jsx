@@ -11,6 +11,7 @@ export default function SidebarNav({ collapsed, setCollapsed }) {
   const navigate = useNavigate();
   const { state } = useApp();
   const [pendingNavigation, setPendingNavigation] = useState(null);
+  const [pendingOptionWarning, setPendingOptionWarning] = useState(null); // { targetPath, count }
 
   const sequencePath = useMemo(
     () =>
@@ -59,56 +60,70 @@ export default function SidebarNav({ collapsed, setCollapsed }) {
     new Promise((resolve) => {
       window.dispatchEvent(
         new CustomEvent(`app:${pageType}-dirty-check-request`, {
-          detail: {
-            respond: resolve,
-          },
+          detail: { respond: resolve },
         })
       );
     });
 
+  const requestOptionCheck = async () =>
+    new Promise((resolve) => {
+      window.dispatchEvent(
+        new CustomEvent("app:sequence-option-check-request", {
+          detail: { respond: resolve },
+        })
+      );
+    });
+
+  const proceedWithDirtyCheck = async (targetPath) => {
+    const pageType = isSequencePage ? "sequence" : "assembly";
+    const hasUnsavedChanges = await requestDirtyCheck(pageType);
+    if (!hasUnsavedChanges) {
+      navigate(targetPath);
+    } else {
+      setPendingNavigation(targetPath);
+    }
+  };
+
   const handleProtectedNavigation = async (event, targetPath) => {
     const shouldPrompt = isSequencePage || isAssemblyPage;
-
-    if (!shouldPrompt) {
-      return;
-    }
-
-    if (targetPath === `${location.pathname}${location.search}`) {
-      return;
-    }
+    if (!shouldPrompt) return;
+    if (targetPath === `${location.pathname}${location.search}`) return;
 
     event.preventDefault();
 
-    const pageType = isSequencePage ? "sequence" : "assembly";
-    const hasUnsavedChanges = await requestDirtyCheck(pageType);
-
-    if (!hasUnsavedChanges) {
-      navigate(targetPath);
-      return;
+    if (isSequencePage) {
+      const missingCount = await requestOptionCheck();
+      if (missingCount > 0) {
+        setPendingOptionWarning({ targetPath, count: missingCount });
+        return;
+      }
     }
 
-    setPendingNavigation(targetPath);
+    await proceedWithDirtyCheck(targetPath);
   };
 
   const closePendingNavigation = () => setPendingNavigation(null);
+  const closePendingOptionWarning = () => setPendingOptionWarning(null);
 
   const navigateWithOptionalSave = async (shouldSave) => {
-    if (!pendingNavigation) {
-      return;
-    }
+    if (!pendingNavigation) return;
 
     const targetPath = pendingNavigation;
     const pageType = isSequencePage ? "sequence" : "assembly";
 
     if (shouldSave) {
       const ok = await requestPageSave(pageType);
-      if (!ok) {
-        return;
-      }
+      if (!ok) return;
     }
 
     setPendingNavigation(null);
     navigate(targetPath);
+  };
+
+  const confirmOptionWarningAndProceed = async () => {
+    const targetPath = pendingOptionWarning?.targetPath;
+    setPendingOptionWarning(null);
+    if (targetPath) await proceedWithDirtyCheck(targetPath);
   };
 
 
@@ -181,9 +196,53 @@ export default function SidebarNav({ collapsed, setCollapsed }) {
         className="sidebar-download-btn"
         onClick={() => downloadSubExcelBundle({ bomId: state.bomId, spec: state.selectedSpec })}
       >
-        <span className="sidebar-download-icon">XLS</span>
+        <span className="sidebar-download-icon">XLSX</span>
         <span className="nav-text">엑셀 다운로드</span>
       </button>
+
+      {pendingOptionWarning && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.45)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 2000,
+          }}
+          onClick={closePendingOptionWarning}
+        >
+          <div
+            style={{
+              width: 380,
+              maxWidth: "calc(100vw - 32px)",
+              borderRadius: 16,
+              background: "#fff",
+              boxShadow: "0 20px 50px rgba(15, 23, 42, 0.22)",
+              padding: 24,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontSize: 17, fontWeight: 700, color: "#b45309", marginBottom: 8 }}>
+              OPTION 미선택 노드 있음
+            </div>
+            <div style={{ fontSize: 14, color: "#475569", marginBottom: 20, lineHeight: 1.6 }}>
+              OPTION이 선택되지 않은 노드가{" "}
+              <strong style={{ color: "#dc2626" }}>{pendingOptionWarning.count}개</strong>{" "}
+              있습니다. 그래도 이동하시겠습니까?
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button type="button" onClick={confirmOptionWarningAndProceed} style={warningButtonStyle}>
+                이동
+              </button>
+              <button type="button" onClick={closePendingOptionWarning} style={secondaryButtonStyle}>
+                취소
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {pendingNavigation && (
         <div
@@ -244,6 +303,17 @@ const secondaryButtonStyle = {
 const primaryButtonStyle = {
   border: 0,
   background: "#2563eb",
+  color: "#fff",
+  borderRadius: 10,
+  padding: "9px 16px",
+  fontSize: 13,
+  fontWeight: 600,
+  cursor: "pointer",
+};
+
+const warningButtonStyle = {
+  border: 0,
+  background: "#d97706",
   color: "#fff",
   borderRadius: 10,
   padding: "9px 16px",

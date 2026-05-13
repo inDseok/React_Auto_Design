@@ -1,193 +1,377 @@
-.tree-node {
+.subtree-shell {
+  padding: 8px 8px 18px;
+  --subtree-indent: 40px;
+  --subtree-branch: 70px;
+}
+
+.subtree-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.subtree-list.nested {
   position: relative;
 }
 
-.tree-row {
+.subtree-item {
   position: relative;
-  display: flex;
-  align-items: center;
+  margin: 0;
+}
+
+.subtree-entry {
+  position: relative;
+  display: block;
   min-height: 44px;
 }
 
-/* 노드 카드 */
-.tree-card {
-  margin-left: 20px;
-  padding: 6px 10px;
-  border: 1px solid #ccc;
-  border-radius: 6px;
-  background: #fff;
-  cursor: pointer;
-  min-width: 240px;
-}
-
-.tree-card.selected {
-  background: #dbeafe;
-  border-color: #2563eb;
-}
-
-/* 각 child */
-.tree-child {
-  position: relative;
-  padding-left: 20px;
-}
-
-/* ├ / └ 가로선 */
-.tree-child::before {
+.subtree-item.has-children.expanded > .subtree-entry::after {
   content: "";
   position: absolute;
-  top: 50%;
-  left: 10px;                 /* ← 핵심 */
-  width: 30px;                /* 카드까지 길이 */
-  height: 1px;
-  background: #bbb;
-  transform: translateY(-50%);
-}
-
-
-/* 마지막 child면 세로선 끊기 */
-.tree-child:last-child::after {
-  content: "";
-  position: absolute;
-  top: 22px;
-  bottom: 0;
-  left: 10px;
+  top: 39px;
+  bottom: -18px;
+  left: calc(var(--subtree-branch) * -1);
   width: 2px;
-  background: white;
+  background: linear-gradient(180deg, #d8e1ed 0%, #c9d5e6 100%);
+  border-radius: 999px;
 }
 
-.drop-zone {
-  height: 8px;
-  margin: 4px 0;
-  background: transparent;
-  transition: background 0.15s ease;
-}
-
-.drop-zone.active {
-  background: #cce4ff;
-  border: 1px dashed #2563eb;
-}
-
-/* SUB 노드 카드 */
-.tree-card.sub-node {
-  border: 1.5px solid #ff4d4f;
-  background: #fff1f0;
-}
-
-/* 선택 + SUB 일 때 우선순위 */
-.tree-card.selected.sub-node {
-  border: 2px solid #ff7875;
-  background: #ffe2e0;
-}
-
-/* SUB 배지 */
-.sub-badge {
-  color: #ff4d4f;
-  font-weight: 600;
-  margin-left: 6px;
-}
-
-.tree-panel {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-}
-
-.tree-scroll {
-  flex: 1;
-  min-height: 0;
-}
-
-.tree-node {
+.subtree-children-wrap {
   position: relative;
+  margin-left: var(--subtree-indent);
+  margin-top: -18px;
+  padding-left: var(--subtree-branch);
+  padding-top: 18px;
 }
 
-.tree-children {
-  margin-left: 40px;
-  padding-left: 16px;
-  position: relative;
-}
-
-/* 왼쪽 세로 라인 */
-.tree-children::before {
+.subtree-children-wrap::before {
   content: "";
   position: absolute;
-  top: 0;
+  top: 18px;
   bottom: 0;
   left: 0;
-  width: 1px;
-  background: #ccc;
+  width: 2px;
+  background: linear-gradient(180deg, #d8e1ed 0%, #c9d5e6 100%);
+  border-radius: 999px;
 }
 
-.tree-child {
-  position: relative;
-  padding-left: 16px;
-}
-
-/* ├ 가로선 */
-.tree-child::before {
+.subtree-item.last > .subtree-entry::after {
   content: "";
   position: absolute;
-  top: 36px;      /* 카드 높이에 맞춰 조정 */
-  left: -16px;
-  width: 28px;
-  height: 1px;
-  background: #ccc;
+  top: 40px;
+  bottom: -18px;
+  left: calc(var(--subtree-branch) * -1);
+  width: 2px;
+  background: #f8fafc;
 }
 
-/* 마지막 child → └ 로 보이도록, 아래 세로선 지우기 */
-.tree-child:last-child::after {
+.subtree-list.nested > .subtree-item > .subtree-entry::before {
   content: "";
   position: absolute;
-  top: 36px;   /* 카드 중앙 조금 아래부터 */
-  bottom: -4px; /* 살짝 더 내려가게 */
-  left: -16px;     /* 세로선과 같은 x 위치 */
-  width: 1px;
-  background: white;  /* 배경색과 동일하게 */
+  top: 39px;
+  left: calc(var(--subtree-branch) * -1);
+  width: calc(var(--subtree-branch) + 8px);
+  height: 2px;
+  background: #c9d5e6;
+  border-radius: 999px;
 }
 
-.tree-panel {
-  padding: 8px 6px;
-}
-
-.tree-node {
-  position: relative;
-}
-
-.tree-row {
+.subtree-toggle,
+.subtree-toggle-spacer {
+  width: 18px;
+  height: 18px;
+  position: absolute;
+  left: -9px;
+  top: 30px;
+  border-radius: 6px;
   display: flex;
   align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  z-index: 2;
 }
 
-/* 카드 강조 */
-.tree-card-antd.selected {
-  border: 2px solid #1677ff !important;
-  background: #e6f4ff;
+.subtree-toggle {
+  border: 1px solid #9fb2cc;
+  background: linear-gradient(180deg, #ffffff 0%, #f5f8fc 100%);
+  color: #5b708f;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.06);
 }
 
-
-/* DropZone 디자인 */
-.drop-zone {
-  height: 6px;
-  margin: 2px 0;
-  border-radius: 6px;
-  transition: all .2s;
+.subtree-toggle:hover {
+  border-color: #7f9bc0;
+  color: #33537e;
 }
 
-.drop-zone.active {
-  background: #1677ff;
-  height: 8px;
+.subtree-toggle-spacer {
+  display: none;
 }
 
-/* 왼쪽 Upload 영역 */
-.top-left {
+.subtree-card-wrap {
+  display: inline-block;
+  width: min(100%, 360px);
+  position: relative;
+  margin-left: 14px;
+}
+
+.subtree-card-wrap.leaf-card {
+  margin-left: 0;
+}
+
+.subtree-card {
+  width: 100%;
+  min-height: 116px;
+  padding: 10px 12px;
+  border: 1px solid #dbe4f0;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.99) 0%, rgba(249, 251, 255, 0.98) 100%);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease, transform 0.16s ease;
+}
+
+.subtree-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 16px 30px rgba(15, 23, 42, 0.08);
+}
+
+.subtree-card.selected {
+  border: 2px solid #1677ff;
+  background: linear-gradient(180deg, #f7fbff 0%, #eaf4ff 100%);
+  box-shadow: 0 18px 34px rgba(22, 119, 255, 0.14);
+}
+
+.subtree-card.dragging {
+  opacity: 0.7;
+  transform: scale(0.995);
+  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.14);
+}
+
+/* 외주 전용 (빨간색) */
+.subtree-item.is-sub:not(.is-inhouse) > .subtree-entry .subtree-card {
+  border-color: #f3c6c4;
+  background: linear-gradient(180deg, #fff7f7 0%, #fff1f1 100%);
+  box-shadow: 0 10px 24px rgba(239, 68, 68, 0.08);
+}
+
+.subtree-item.is-sub:not(.is-inhouse) > .subtree-entry .subtree-card:hover {
+  box-shadow: 0 16px 30px rgba(239, 68, 68, 0.12);
+}
+
+.subtree-item.is-sub:not(.is-inhouse) > .subtree-entry .subtree-card.selected {
+  border: 2px solid #ef4444;
+  background: linear-gradient(180deg, #fff5f5 0%, #ffe7e7 100%);
+  box-shadow: 0 18px 34px rgba(239, 68, 68, 0.16);
+}
+
+/* 사내 조립 전용 (파란색) */
+.subtree-item.is-inhouse:not(.is-sub) > .subtree-entry .subtree-card {
+  border-color: #bcd4f9;
+  background: linear-gradient(180deg, #f0f7ff 0%, #e8f2ff 100%);
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.08);
+}
+
+.subtree-item.is-inhouse:not(.is-sub) > .subtree-entry .subtree-card:hover {
+  box-shadow: 0 16px 30px rgba(37, 99, 235, 0.12);
+}
+
+.subtree-item.is-inhouse:not(.is-sub) > .subtree-entry .subtree-card.selected {
+  border: 2px solid #2563eb;
+  background: linear-gradient(180deg, #eff6ff 0%, #dbeafe 100%);
+  box-shadow: 0 18px 34px rgba(37, 99, 235, 0.16);
+}
+
+/* 외주 + 사내 조립 동시 (파란색/빨간색 대각선 반반) */
+.subtree-item.is-sub.is-inhouse > .subtree-entry .subtree-card {
+  border-color: #c4aee8;
+  background: linear-gradient(135deg, #eff6ff 0%, #eff6ff 50%, #fff5f5 50%, #fff5f5 100%);
+  box-shadow: 0 10px 24px rgba(109, 40, 217, 0.07);
+}
+
+.subtree-item.is-sub.is-inhouse > .subtree-entry .subtree-card:hover {
+  box-shadow: 0 16px 30px rgba(109, 40, 217, 0.11);
+}
+
+.subtree-item.is-sub.is-inhouse > .subtree-entry .subtree-card.selected {
+  border: 2px solid #7c3aed;
+  background: linear-gradient(135deg, #eff6ff 0%, #eff6ff 50%, #fff5f5 50%, #fff5f5 100%);
+  box-shadow: 0 18px 34px rgba(124, 58, 237, 0.15);
+}
+
+.subtree-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.subtree-card-title-wrap {
+  min-width: 0;
   flex: 1;
 }
 
-.spec-panel {
-  position: fixed;
-  top: 80px;      /* Header 아래 */
-  right: 20px;    /* 오른쪽 여백 */
-  width: 320px;
+.subtree-card-kicker-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 3px;
+}
 
-  z-index: 1000;  /* 트리 위로 올라오게 */
+.subtree-type-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.subtree-type-dot.assembly {
+  background: linear-gradient(135deg, #94a3b8 0%, #64748b 100%);
+}
+
+.subtree-type-dot.part {
+  background: linear-gradient(135deg, #60a5fa 0%, #2563eb 100%);
+}
+
+.subtree-card-kicker {
+  color: #8b9bb3;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.subtree-card-title {
+  display: block;
+  color: #22324b;
+  font-size: 16px;
+  line-height: 1.3;
+  word-break: break-word;
+}
+
+.subtree-card-tags {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.subtree-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  color: #94a3b8;
+  font-size: 12px;
+  letter-spacing: -0.15em;
+  border-radius: 6px;
+  cursor: grab;
+  user-select: none;
+}
+
+.subtree-drag-handle:active {
+  cursor: grabbing;
+}
+
+.subtree-card-meta {
+  margin-top: 9px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, max-content));
+  gap: 6px;
+}
+
+.subtree-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(248, 250, 252, 0.96);
+  border: 1px solid #dbe4f0;
+  color: #334155;
+}
+
+.subtree-pill-wide {
+  grid-column: 1 / -1;
+  max-width: 100%;
+  border-radius: 12px;
+}
+
+.subtree-pill-label {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.subtree-pill-value {
+  color: #0f172a;
+  font-size: 11px;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.subtree-dropzone {
+  height: 10px;
+  margin: 2px 0 6px calc(var(--subtree-indent) + 10px);
+  border-radius: 999px;
+  transition: all 0.18s ease;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.subtree-dropzone.enabled {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.subtree-dropzone.active {
+  background: linear-gradient(90deg, rgba(22, 119, 255, 0.18), rgba(22, 119, 255, 0.3));
+  border: 1px dashed #1677ff;
+  box-shadow: 0 0 0 3px rgba(22, 119, 255, 0.08);
+}
+
+@media (max-width: 960px) {
+  .subtree-shell {
+    --subtree-indent: 24px;
+    --subtree-branch: 20px;
+  }
+
+  .subtree-list.nested {
+    margin-left: 0;
+    padding-left: 0;
+  }
+
+  .subtree-children-wrap {
+    margin-left: var(--subtree-indent);
+    padding-left: var(--subtree-branch);
+  }
+
+  .subtree-card {
+    width: 100%;
+    min-height: 0;
+  }
+
+  .subtree-card-wrap {
+    margin-left: 12px;
+  }
+
+  .subtree-card-wrap.leaf-card {
+    margin-left: 0;
+  }
+
+  .subtree-card-head {
+    flex-direction: column;
+  }
+
+  .subtree-card-tags {
+    justify-content: flex-start;
+  }
+
+  .subtree-card-meta {
+    grid-template-columns: 1fr;
+  }
 }

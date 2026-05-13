@@ -34,6 +34,31 @@ backend/data/
 backend/__pycache__
 backend/Assembly/__pycache__
 backend/Sub/__pycache__
+backend/finetune_sequence/cases/
+backend/finetune_sequence/outputs/
+backend/finetune_sequence/sequences/
+backend/finetune_sequence/sources/
+backend/finetune_sequence/models/
 backend/작업시간분석표DB.xlsx
 backend/9B753100
 backend/A4163100
+.env
+
+# Python cache
+**/__pycache__/
+__pycache__/
+backend/**/__pycache__/
+*.py[cod]
+
+# Local workspace / generated artifacts
+.claude/
+backend/logs/
+backend/sequence/data/
+backend/sequence/dataset/cases/
+backend/sequence/dataset/jsonl/
+backend/finetune_sequence/jsonl/
+backend/sequence_rag/data/graph_index*.json
+backend/sequence_rag/data/neo4j_2_graph_index.json
+node_modules/
+통합 문서1_sequence.json
+폴더 나누는.py

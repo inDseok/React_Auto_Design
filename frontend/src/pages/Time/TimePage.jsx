@@ -6,6 +6,19 @@ import { computeRowspanInfo } from "../Assembly/groupUtils";
 import TimeAnalysisView from "./TimeAnalysisView";
 import { buildGroupOrder, buildGroupRowsMap, getSummary } from "./timeUtils";
 
+function toNumber(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  if (typeof value === "string") {
+    const parsed = Number(value.replace(/,/g, "").trim());
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+function isVisibleTimeRow(row) {
+  return toNumber(row?.["반복횟수"]) !== 0;
+}
+
 export default function TimePage() {
   const [params] = useSearchParams();
   const { state, actions } = useApp();
@@ -41,7 +54,7 @@ export default function TimePage() {
       setLoading(true);
       try {
         const saved = await loadSavedRows(bomId, spec);
-        setRows(saved);
+        setRows((saved || []).filter(isVisibleTimeRow));
       } finally {
         setLoading(false);
       }
