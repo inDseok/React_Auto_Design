@@ -486,6 +486,83 @@ def run_worker_loop(
             break
 
 
+def create_inline_bom_job(
+    binary_data: bytes,
+    original_filename: str,
+    owner_sid: Optional[str] = None,
+):
+    """worker_main.py 없이 FastAPI BackgroundTasks로 처리할 때 사용."""
+    initial = build_initial_bom_run(original_filename, owner_sid=owner_sid)
+    input_file_path = store_uploaded_file(initial["root"], original_filename, binary_data)
+    job_id = str(uuid4())
+    bom_id = initial["bom_id"]
+    root = initial["root"]
+
+    now = _utc_now_iso()
+    job: Dict[str, Any] = {
+        "job_id": job_id,
+        "job_type": "bom_import",
+        "bom_id": bom_id,
+        "root_dir": str(root),
+        "input_file_path": str(input_file_path),
+        "original_filename": original_filename,
+        "owner_sid": owner_sid,
+        "status": "running",
+        "step": "starting",
+        "progress": 0,
+        "message": "BOM 분석을 시작합니다.",
+        "error_message": None,
+        "created_at": now,
+        "started_at": now,
+        "finished_at": None,
+        "worker_id": "inline",
+    }
+    _write_job(job)
+
+    bom_meta = initial["bom_meta"]
+    bom_meta.update({"job_id": job_id, "status": "running"})
+    write_bom_meta(root, bom_meta)
+
+    def _process() -> None:
+        def progress_callback(step: str, progress: int, message: str) -> None:
+            _update_job(job_id, status="running", step=step, progress=progress, message=message)
+
+        try:
+            process_bom_run(
+                bom_id=bom_id,
+                root=root,
+                binary_data=binary_data,
+                original_filename=original_filename,
+                progress_callback=progress_callback,
+            )
+        except Exception as error:
+            _update_job(
+                job_id,
+                status="failed",
+                step="failed",
+                progress=100,
+                message="BOM 분석에 실패했습니다.",
+                error_message=str(error),
+                finished_at=_utc_now_iso(),
+            )
+            bom_meta.update({"status": "failed"})
+            write_bom_meta(root, bom_meta)
+            return
+
+        _update_job(
+            job_id,
+            status="completed",
+            step="completed",
+            progress=100,
+            message="BOM 분석이 완료되었습니다.",
+            finished_at=_utc_now_iso(),
+        )
+        bom_meta.update({"status": "completed"})
+        write_bom_meta(root, bom_meta)
+
+    return _serialize_job(job), _process
+
+
 def run_worker_once(worker_id: Optional[str] = None) -> bool:
     resolved_worker_id = worker_id or f"bom-worker-once-{uuid4()}"
     requeue_unfinished_jobs()

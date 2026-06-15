@@ -7,7 +7,7 @@ import json
 import io
 from uuid import uuid4
 
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, UploadFile, File, Query
+from fastapi import FastAPI, APIRouter, BackgroundTasks, HTTPException, Request, Response, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
@@ -17,7 +17,7 @@ from pathlib import Path
 
 from backend.models import SubNodePatch, SubTree, SubTreeRestoreRequest, MoveNodeRequest, SubNode, NodeType, TreeMeta
 from backend.Sub.bom_service import BOM_RUNS_DIR
-from backend.Sub.job_service import enqueue_bom_import_job, get_active_workers, get_bom_status, get_job
+from backend.Sub.job_service import create_inline_bom_job, get_active_workers, get_bom_status, get_job
 from backend.Sub.utills import load_tree_json, save_tree_json, read_bom_meta, read_spec_meta
 from backend.Sub.excel_loader import build_tree_from_sheet
 from typing import Optional
@@ -162,12 +162,14 @@ def get_bom_processing_status(bom_id: str):
 async def upload_bom(
     request: Request,
     response: Response,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
 ):
     binary = await file.read()
     try:
         sid = get_or_create_sid(request, response)
-        job = enqueue_bom_import_job(binary, file.filename or "bom.xlsx", owner_sid=sid)
+        job, process_fn = create_inline_bom_job(binary, file.filename or "bom.xlsx", owner_sid=sid)
+        background_tasks.add_task(process_fn)
         return job
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
