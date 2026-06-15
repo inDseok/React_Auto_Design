@@ -92,6 +92,26 @@ SEQUENCE_GRAPH_INDEX_PATH=backend/sequence_rag/data/graph_index.json
 SEQUENCE_SOURCE_SEQUENCE_DIR=backend/sequence_rag/source_sequences
 ```
 
+### 3. Neo4j (Sequence RAG)
+
+시퀀스 AI 추천에 사용하는 그래프 DB입니다.
+
+1. [Neo4j Desktop](https://neo4j.com/download/) 설치 후 데이터베이스 생성 (이름: `test2`)
+2. 데이터 임포트:
+
+```bash
+cypher-shell -u neo4j -p [비밀번호] -d test2 -f backend/sequence_rag/data/neo4j_import.cypher
+```
+
+3. `.env`에 연결 정보 설정:
+
+```env
+SEQUENCE_NEO4J_URI=bolt://localhost:7687
+SEQUENCE_NEO4J_USER=neo4j
+SEQUENCE_NEO4J_PASSWORD=[비밀번호]
+SEQUENCE_NEO4J_DATABASE=test2
+```
+
 ## Notes
 
 - 루트 `package.json`은 최소 의존성만 가지고 있고, 실제 프론트 실행은 `frontend/`에서 진행합니다.
