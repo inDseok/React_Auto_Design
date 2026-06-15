@@ -18,6 +18,7 @@ from backend.Assembly.auto_match import (
     match_one_best,
     jw_score,
     COMBINED_THRESHOLD,
+    normalize_text,
     rf_score,
     TOPK,
 )
@@ -84,6 +85,20 @@ def _get_cached_db_rows(excel_path_str: str, mtime: float):
     return load_db_rows(Path(excel_path_str))
 
 
+@lru_cache(maxsize=4)
+def _get_cached_db_match_data(excel_path_str: str, mtime: float):
+    db_rows, db_choices = _get_cached_db_rows(excel_path_str, mtime)
+    exact_rows_by_norm: Dict[str, List[Dict[str, Any]]] = {}
+
+    for row in db_rows:
+        norm = str(row.get("db_part_norm") or "").strip()
+        if not norm:
+            continue
+        exact_rows_by_norm.setdefault(norm, []).append(row)
+
+    return db_rows, db_choices, exact_rows_by_norm
+
+
 def _format_tree_label(node: Dict) -> str:
     for key in ("id", "part_no", "name"):
         value = node.get(key)
@@ -124,6 +139,138 @@ def _build_tree_path_map(nodes: List[Dict]) -> Dict[str, List[str]]:
     return path_cache
 
 
+def _build_match_score_from_candidate(candidate: Dict[str, Any], source: str = "auto-match") -> Dict[str, Any]:
+    return {
+        "combined": float(candidate["score_combined"]),
+        "rapidfuzz": float(candidate["score_rapidfuzz"]),
+        "jaro_winkler": float(candidate["score_jw"]),
+        "source": source,
+    }
+
+
+@lru_cache(maxsize=32)
+def _get_cached_sequence_part_candidates(
+    bom_id: str,
+    spec: str,
+    include_all_parts: bool,
+    tree_mtime: float,
+    excel_mtime: float,
+) -> Dict[str, Any]:
+    root_dir = DATA_DIR / "data" / "bom_runs" / bom_id
+    json_path = root_dir / f"{spec}.json"
+    excel_path = DATA_DIR / "작업시간분석표DB.xlsx"
+
+    try:
+        tree = json.loads(json_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise HTTPException(500, f"JSON 로드 실패: {str(e)}")
+
+    nodes = tree.get("nodes", [])
+    db_rows, db_choices, exact_rows_by_norm = _get_cached_db_match_data(
+        str(excel_path.resolve()),
+        excel_mtime,
+    )
+
+    parts = []
+    query_cache: Dict[str, Optional[Dict[str, Any]]] = {}
+    tree_path_map = _build_tree_path_map(nodes)
+
+    for n in nodes:
+        if n.get("type") != "PART":
+            continue
+        if not include_all_parts and n.get("inhouse") is not True:
+            continue
+
+        part_id = n.get("id")
+        part_name = part_id or n.get("name")
+        node_name = str(n.get("name") or "").strip()
+        recommended_part_base = n.get("recommended_part_base")
+        recommended_source_sheet = n.get("recommended_source_sheet")
+        recommended_match_score = n.get("recommended_match_score")
+
+        best = None
+        if recommended_part_base and recommended_source_sheet:
+            part_base = recommended_part_base
+            source_sheet = recommended_source_sheet
+            match_score = recommended_match_score or {
+                "source": "manual-recommendation",
+            }
+        else:
+            for query_raw in [part_name, part_id]:
+                if not query_raw:
+                    continue
+
+                query_text = str(query_raw).strip()
+                if not query_text:
+                    continue
+
+                if query_text in query_cache:
+                    candidate = query_cache[query_text]
+                else:
+                    normalized_query = normalize_text(query_text)
+                    exact_matches = exact_rows_by_norm.get(normalized_query, [])
+
+                    if len(exact_matches) == 1:
+                        exact_match = exact_matches[0]
+                        candidate = {
+                            "json_id_raw": query_text,
+                            "json_id_norm": normalized_query,
+                            "db_part_raw": exact_match["db_part_raw"],
+                            "db_part_norm": exact_match["db_part_norm"],
+                            "score_rapidfuzz": 100.0,
+                            "score_jw": 100.0,
+                            "score_combined": 100.0,
+                            "sheet": exact_match["sheet"],
+                            "row_index": exact_match["row_index"],
+                        }
+                    else:
+                        candidate = match_one_best(
+                            query_raw=query_text,
+                            db_rows=db_rows,
+                            db_choices=db_choices,
+                            topk=TOPK,
+                        )
+
+                    query_cache[query_text] = candidate
+
+                if candidate and candidate["score_combined"] >= COMBINED_THRESHOLD:
+                    best = candidate
+                    break
+
+        if recommended_part_base and recommended_source_sheet:
+            pass
+        elif best and best["score_combined"] >= COMBINED_THRESHOLD:
+            part_base = best["db_part_raw"]
+            source_sheet = best["sheet"]
+            match_score = _build_match_score_from_candidate(best)
+        else:
+            part_base = None
+            source_sheet = None
+            match_score = None
+
+        parts.append({
+            "partId": part_id,
+            "partName": part_name,
+            "inhouse": n.get("inhouse") is True,
+            "treePath": tree_path_map.get(node_name, []),
+            "parentName": n.get("parent_name"),
+            "nodeName": node_name,
+            "partBase": part_base,
+            "sourceSheet": source_sheet,
+            "matchScore": match_score,
+            "parentId": n.get("parent_id"),
+            "order": n.get("order"),
+        })
+
+    return {
+        "bomId": bom_id,
+        "spec": spec,
+        "source": "sub-tree + auto-match" if include_all_parts else "sub-tree inhouse + auto-match",
+        "count": len(parts),
+        "parts": parts,
+    }
+
+
 def _load_sequence_part_candidates(
     bom_id: str,
     spec: str,
@@ -148,109 +295,24 @@ def _load_sequence_part_candidates(
             "count": 0,
             "parts": [],
         }
-
-    # =========================
-    # 1. 트리 로드
-    # =========================
-    try:
-        tree = json.loads(json_path.read_text(encoding="utf-8"))
-    except Exception as e:
-        raise HTTPException(500, f"JSON 로드 실패: {str(e)}")
-
-    nodes = tree.get("nodes", [])
-
-    # =========================
-    # 2. 작업시간 DB 로드 (1회)
-    # =========================
-    db_rows, db_choices = _get_cached_db_rows(
-        str(excel_path.resolve()),
+    return _get_cached_sequence_part_candidates(
+        bom_id,
+        spec,
+        include_all_parts,
+        json_path.stat().st_mtime,
         excel_path.stat().st_mtime,
     )
 
-    parts = []
-    query_cache = {}
-    tree_path_map = _build_tree_path_map(nodes)
 
-    # =========================
-    # 3. PART + auto-match
-    # =========================
-    for n in nodes:
-        if n.get("type") != "PART":
-            continue
-        if not include_all_parts and n.get("inhouse") is not True:
-            continue
-
-        part_id = n.get("id")
-        part_name = part_id or n.get("name")
-        node_name = str(n.get("name") or "").strip()
-        recommended_part_base = n.get("recommended_part_base")
-        recommended_source_sheet = n.get("recommended_source_sheet")
-        recommended_match_score = n.get("recommended_match_score")
-        # Sequence에서는 사용자가 SUB에서 바꾼 이름을 우선 매칭 기준으로 사용한다.
-        best = None
-        if recommended_part_base and recommended_source_sheet:
-            part_base = recommended_part_base
-            source_sheet = recommended_source_sheet
-            match_score = recommended_match_score or {
-                "source": "manual-recommendation",
-            }
-        else:
-            for query_raw in [part_name, part_id]:
-                if not query_raw:
-                    continue
-
-                if query_raw in query_cache:
-                    candidate = query_cache[query_raw]
-                else:
-                    candidate = match_one_best(
-                        query_raw=query_raw,
-                        db_rows=db_rows,
-                        db_choices=db_choices,
-                        topk=TOPK,
-                    )
-                    query_cache[query_raw] = candidate
-
-                if candidate and candidate["score_combined"] >= COMBINED_THRESHOLD:
-                    best = candidate
-                    break
-
-        if recommended_part_base and recommended_source_sheet:
-            pass
-        elif best and best["score_combined"] >= COMBINED_THRESHOLD:
-            part_base = best["db_part_raw"]
-            source_sheet = best["sheet"]
-            match_score = {
-                "combined": float(best["score_combined"]),
-                "rapidfuzz": float(best["score_rapidfuzz"]),
-                "jaro_winkler": float(best["score_jw"]),
-            }
-        else:
-            part_base = None
-            source_sheet = None
-            match_score = None
-
-        parts.append({
-            "partId": part_id,
-            "partName": part_name,
-            "inhouse": n.get("inhouse") is True,
-            "treePath": tree_path_map.get(node_name, []),
-            "parentName": n.get("parent_name"),
-            "nodeName": node_name,
-
-            # 🔑 Inspector / Palette 핵심 메타
-            "partBase": part_base,
-            "sourceSheet": source_sheet,
-            "matchScore": match_score,
-
-            # SUB 트리 메타
-            "parentId": n.get("parent_id"),
-            "order": n.get("order"),
-        })
-
+def _filter_sequence_part_candidates_to_db_mapped(payload: Dict[str, Any]) -> Dict[str, Any]:
+    parts = [
+        part
+        for part in list(payload.get("parts") or [])
+        if str(part.get("partBase") or "").strip() and str(part.get("sourceSheet") or "").strip()
+    ]
     return {
-        "bomId": bom_id,
-        "spec": spec,
-        "source": "sub-tree + auto-match" if include_all_parts else "sub-tree inhouse + auto-match",
+        **payload,
+        "source": "작업시간분석표 매핑 부품",
         "count": len(parts),
         "parts": parts,
     }
@@ -272,7 +334,8 @@ def get_sequence_parts(bomId: str, spec: str):
     Sequence 채팅 추천용 전체 PART 목록 반환
     - 상위 조립체(inhouse=false) 포함
     """
-    return _load_sequence_part_candidates(bomId, spec, include_all_parts=True)
+    payload = _load_sequence_part_candidates(bomId, spec, include_all_parts=True)
+    return _filter_sequence_part_candidates_to_db_mapped(payload)
 
 
 
@@ -655,6 +718,11 @@ _CHAT_TOKEN_SYNONYMS = {
     "렌즈": ["LENS", "OTR LENS", "INR LENS", "ASPHERIC LENS", "TIR LENS"],
     "메인렌즈": ["MAIN LENS", "OTR LENS", "OTR", "MAIN"],
     "메인 렌즈": ["MAIN LENS", "OTR LENS", "OTR", "MAIN"],
+    "히트싱크": ["HEAT SINK", "H/S"],
+    "히트 싱크": ["HEAT SINK", "H/S"],
+    "HEAT": ["HEAT SINK"],
+    "SINK": ["HEAT SINK"],
+    "H/S": ["HEAT SINK", "H/S"],
     "램": ["LAM"],
     "람": ["LAM"],
     "LAM": ["LAM"],
@@ -671,6 +739,8 @@ _CHAT_TOKEN_SYNONYMS = {
     "프로젝션": ["PROJECTION", "PROJ", "UNIT"],
     "유닛": ["UNIT"],
     "하우징": ["HOUSING", "MAIN HOUSING", "HOUSING S/A"],
+    "모듈": ["MODULE", "모듈", "LDM", "LED DRIVE MODULE", "주광 LED 모듈 ASS'Y", "광모듈"],
+    "MODULE": ["MODULE", "모듈", "LDM", "LED DRIVE MODULE", "주광 LED 모듈 ASS'Y", "광모듈"],
     "광모듈": ["주광 LED 모듈 ASS'Y"],
     "광 모듈": ["주광 LED 모듈 ASS'Y"],
     "바코드": ["BAR", "CODE", "BAR CODE", "BAR-CODE"],
@@ -750,6 +820,7 @@ _CHAT_FASTENER_HINTS = (
 )
 
 _CHAT_PART_FAMILY_HINTS = {
+    "HEAT SINK": ("히트싱크", "히트 싱크", "HEAT SINK", "H/S"),
     "BEZEL": ("베젤", "BEZEL"),
     "LENS": ("렌즈", "LENS"),
     "HOUSING": ("하우징", "HOUSING", "HSG"),
@@ -757,6 +828,7 @@ _CHAT_PART_FAMILY_HINTS = {
     "BUMPER": ("범퍼", "BUMPER"),
     "COVER": ("커버", "COVER"),
     "CAP": ("캡", "CAP"),
+    "MODULE": ("모듈", "MODULE", "광모듈", "광 모듈", "LDM", "LED DRIVE MODULE", "주광 LED 모듈"),
     "LDM": ("광모듈", "광 모듈", "LDM", "LED DRIVE MODULE", "주광 LED 모듈"),
     "PCB": ("PCB", "기판"),
 }
@@ -925,6 +997,11 @@ def _part_matches_requested_families(
             return True
         if family == "BRACKET" and ("BRACKET" in haystack or "BRKT" in haystack or "브라켓" in haystack):
             return True
+        if family == "MODULE" and any(
+            hint in haystack
+            for hint in ("MODULE", "모듈", "LDM", "LED DRIVE MODULE", "주광 LED 모듈", "광모듈", "광 모듈")
+        ):
+            return True
         if family in haystack:
             return True
     return False
@@ -1043,6 +1120,7 @@ def _boost_requested_action_process_matches(
     requested_actions = _requested_process_actions_from_message(message_tokens)
     if not requested_actions:
         return process_matches
+    suppress_fastener_candidates = _message_prefers_connector_connection(message_tokens)
 
     boosted = list(process_matches or [])
     supplemental_candidates = _recommend_processes_from_message_fallback(
@@ -1050,6 +1128,15 @@ def _boost_requested_action_process_matches(
         effective_process_templates=effective_process_templates,
         limit=max(limit * 4, 20),
     )
+    if suppress_fastener_candidates:
+        boosted = [
+            item for item in boosted
+            if not _is_fastener_like_process_candidate(item)
+        ]
+        supplemental_candidates = [
+            item for item in supplemental_candidates
+            if not _is_fastener_like_process_candidate(item)
+        ]
     supplemental_candidates = _dedupe_process_family_matches(
         [
             *supplemental_candidates,
@@ -1067,6 +1154,10 @@ def _boost_requested_action_process_matches(
                 }
                 for process in effective_process_templates
                 if str(process.get("processKey") or "").strip()
+                and not (
+                    suppress_fastener_candidates
+                    and _is_fastener_like_process_candidate(process)
+                )
                 and any(
                     _normalize_chat_text(hint) in " ".join(
                         _normalize_chat_text(value)
@@ -1265,11 +1356,16 @@ def _filter_process_matches_by_requested_context(
     message_tokens: List[str],
 ) -> List[Dict[str, Any]]:
     requested_actions = _requested_process_actions_from_message(message_tokens)
+    requested_fastener = _message_requests_fastener(message_tokens)
+    requested_fastener_types = _requested_fastener_types_from_message(message_tokens)
     if not requested_families and not requested_actions:
         return process_matches
 
     filtered: List[Dict[str, Any]] = []
     for item in process_matches or []:
+        if requested_fastener and _fastener_candidate_matches_requested_types(item, requested_fastener_types):
+            filtered.append(item)
+            continue
         context_families = _detect_part_families_in_values(
             _read_candidate_values(
                 item,
@@ -1479,22 +1575,6 @@ def _part_matches_lighting_module_alias(value: Any) -> bool:
 
 
 def _resolve_chat_part_display_label(part: Dict[str, Any], message_tokens: List[str]) -> Optional[str]:
-    token_blob = " ".join(_normalize_chat_text(token) for token in message_tokens if token).strip()
-    if not token_blob:
-        return None
-
-    part_values = (
-        part.get("displayLabel"),
-        part.get("partBase"),
-        part.get("partName"),
-        part.get("partId"),
-        part.get("nodeName"),
-    )
-    if ("광모듈" in token_blob or "광 모듈" in token_blob) and any(
-        _part_matches_lighting_module_alias(value) for value in part_values if value
-    ):
-        return "주광 LED 모듈 ASS'Y"
-
     return None
 
 
@@ -1592,6 +1672,8 @@ def _message_requests_fastener(message_tokens: List[str]) -> bool:
     token_blob = " ".join(_normalize_chat_text(token) for token in message_tokens if token).strip()
     if not token_blob:
         return False
+    if _message_prefers_connector_connection(message_tokens):
+        return False
     return any(
         hint in token_blob
         for hint in (
@@ -1611,6 +1693,8 @@ def _requested_fastener_types_from_message(message_tokens: List[str]) -> set[str
     token_blob = " ".join(_normalize_chat_text(token) for token in message_tokens if token).strip()
     if not token_blob:
         return set()
+    if _message_prefers_connector_connection(message_tokens):
+        return set()
 
     requested: set[str] = set()
     if any(hint in token_blob for hint in ("SCREW", "T/SCREW", "M/SCREW", "스크류", "나사")):
@@ -1622,6 +1706,109 @@ def _requested_fastener_types_from_message(message_tokens: List[str]) -> set[str
     if "체결" in token_blob and not requested:
         requested.add("GENERIC")
     return requested
+
+
+def _message_requests_explicit_screw_text(message_text: str) -> bool:
+    normalized = _normalize_chat_text(message_text)
+    if not normalized:
+        return False
+    return any(
+        hint in normalized
+        for hint in ("스크류", "SCREW", "T/SCREW", "M/SCREW", "나사", "볼트")
+    )
+
+
+def _message_prefers_connector_connection(message_tokens: List[str]) -> bool:
+    token_blob = " ".join(_normalize_chat_text(token) for token in message_tokens if token).strip()
+    if not token_blob:
+        return False
+    if not any(
+        hint in token_blob
+        for hint in (
+            "CONNECTOR",
+            "커넥터",
+            "연결",
+            "WIRE",
+            "WIRING",
+            "커넥팅",
+            "CONNECTING",
+            "COUPLER",
+            "SOCKET",
+            "HARNESS",
+            "하네스",
+        )
+    ):
+        return False
+    if any(hint in token_blob for hint in ("SCREW", "T/SCREW", "M/SCREW", "스크류", "볼트", "나사", "FASTENER")):
+        return False
+    return True
+
+
+def _filter_out_fastener_for_connector_connection(
+    process_matches: List[Dict[str, Any]],
+    message_tokens: List[str],
+) -> List[Dict[str, Any]]:
+    if not _message_prefers_connector_connection(message_tokens):
+        return list(process_matches or [])
+    return [
+        item
+        for item in (process_matches or [])
+        if not _is_fastener_like_process_candidate(item)
+    ]
+
+
+def _boost_connector_connection_process_matches(
+    process_matches: List[Dict[str, Any]],
+    *,
+    effective_process_templates: List[Dict[str, Any]],
+    message_tokens: List[str],
+    limit: int,
+) -> List[Dict[str, Any]]:
+    if not _message_prefers_connector_connection(message_tokens):
+        return list(process_matches or [])
+
+    boosted = _filter_out_fastener_for_connector_connection(process_matches, message_tokens)
+    connector_candidates: List[Dict[str, Any]] = []
+    for template in effective_process_templates or []:
+        haystack = " ".join(
+            _normalize_chat_text(value)
+            for value in (
+                template.get("processKey"),
+                template.get("label"),
+                template.get("partBase"),
+                template.get("sourceSheet"),
+            )
+            if value
+        ).strip()
+        if not haystack:
+            continue
+        if not any(
+            hint in haystack
+            for hint in (
+                "CONNECTOR",
+                "커넥터",
+                "연결",
+                "WIRE",
+                "WIRING",
+                "커넥팅",
+                "CONNECTING",
+                "COUPLER",
+                "SOCKET",
+                "HARNESS",
+                "하네스",
+            )
+        ):
+            continue
+        connector_candidates.append(
+            _build_process_match_from_template(
+                template,
+                score=999.0,
+                reason="커넥터 연결 요청 보정",
+            )
+        )
+
+    merged = _dedupe_process_family_matches([*connector_candidates, *boosted])
+    return merged[:limit]
 
 
 def _fastener_candidate_matches_requested_types(item: Any, requested_fastener_types: set[str]) -> bool:
@@ -1702,7 +1889,7 @@ def _boost_fastener_process_matches(
     for template in effective_process_templates or []:
         if not _fastener_candidate_matches_requested_types(template, requested_fastener_types):
             continue
-        if requested_part_families:
+        if requested_part_families and "GENERIC" in requested_fastener_types:
             context_families = _detect_part_families_in_values(
                 (
                     template.get("partBase"),
@@ -1993,6 +2180,33 @@ def _build_db_part_recommendation(
         "partName": part_base,
         "partId": part_base,
         "sourceSheet": source_sheet or None,
+        "score": round(float(score), 3),
+        "reason": reason,
+    }
+
+
+def _build_raw_part_recommendation(
+    part: Any,
+    *,
+    reason: str,
+    score: float,
+) -> Dict[str, Any]:
+    read = (lambda key: part.get(key) if isinstance(part, dict) else getattr(part, key, None))
+    part_base = str(
+        read("partBase")
+        or read("partId")
+        or read("nodeName")
+        or read("partName")
+        or ""
+    ).strip()
+    return {
+        "nodeName": str(read("nodeName") or part_base).strip(),
+        "partBase": part_base,
+        "partName": str(read("partName") or part_base).strip(),
+        "partId": str(read("partId") or part_base).strip(),
+        "sourceSheet": str(read("sourceSheet") or "").strip() or None,
+        "treePath": list(read("treePath") or []),
+        "parentName": read("parentName"),
         "score": round(float(score), 3),
         "reason": reason,
     }
@@ -2353,16 +2567,6 @@ def _build_candidate_part_matches(
             for value in candidate_values
             if str(value or "").strip()
         }
-        db_part_entry = _resolve_db_part_entry(
-            candidate_values,
-            db_part_lookup,
-            getattr(part, "sourceSheet", None),
-        )
-        if db_part_entry is None:
-            continue
-        if normalized_candidates.intersection(process_labels):
-            continue
-
         score, matched_tokens = _score_candidate(
             message_tokens,
             getattr(part, "partBase", None),
@@ -2373,6 +2577,16 @@ def _build_candidate_part_matches(
             getattr(part, "parentName", None),
         )
         if score <= 0:
+            continue
+
+        db_part_entry = _resolve_db_part_entry(
+            candidate_values,
+            db_part_lookup,
+            getattr(part, "sourceSheet", None),
+        )
+        if normalized_candidates.intersection(process_labels):
+            continue
+        if db_part_entry is None:
             continue
 
         ranked.append(
@@ -2392,6 +2606,154 @@ def _build_candidate_part_matches(
     return _dedupe_part_matches(ranked)[:limit]
 
 
+def _part_match_has_direct_message_overlap(item: Dict[str, Any], message_tokens: List[str]) -> bool:
+    if not item or not message_tokens:
+        return False
+    requested_families = _requested_part_families_from_message(message_tokens)
+    item_families = _detect_part_families_in_values(
+        (
+            item.get("displayLabel"),
+            item.get("partBase"),
+            item.get("partName"),
+            item.get("partId"),
+            item.get("nodeName"),
+        )
+    )
+    if requested_families and item_families.intersection(requested_families):
+        return True
+    return any(
+        _candidate_overlaps_tokens(
+            item.get(key),
+            message_tokens,
+        )
+        for key in ("displayLabel", "partBase", "partName", "partId", "nodeName")
+    )
+
+
+def _prioritize_direct_message_part_matches(
+    part_matches: List[Dict[str, Any]],
+    message_tokens: List[str],
+) -> List[Dict[str, Any]]:
+    deduped = _dedupe_part_matches(part_matches or [])
+    if not deduped or not message_tokens:
+        return deduped
+
+    direct_matches = [
+        item for item in deduped if _part_match_has_direct_message_overlap(item, message_tokens)
+    ]
+    if not direct_matches:
+        return deduped
+
+    direct_keys = {_part_match_key(item) for item in direct_matches}
+    remainder = [item for item in deduped if _part_match_key(item) not in direct_keys]
+    return [*direct_matches, *remainder]
+
+
+def _build_direct_message_part_matches(
+    candidate_parts: List[Any],
+    message_tokens: List[str],
+    *,
+    effective_process_templates: List[Dict[str, Any]],
+    limit: int,
+) -> List[Dict[str, Any]]:
+    ranked_matches = _build_candidate_part_matches(
+        candidate_parts,
+        message_tokens,
+        limit=max(limit, 10),
+        effective_process_templates=effective_process_templates,
+    )
+    direct_matches = [
+        item for item in ranked_matches if _part_match_has_direct_message_overlap(item, message_tokens)
+    ]
+    return _dedupe_part_matches(direct_matches)[:limit]
+
+
+def _build_fast_path_process_matches(
+    selected_parts: List[Dict[str, Any]],
+    *,
+    effective_process_templates: List[Dict[str, Any]],
+    message_tokens: List[str],
+    requested_part_families: Set[str],
+    limit: int,
+) -> List[Dict[str, Any]]:
+    if not selected_parts or not effective_process_templates:
+        return []
+
+    selected_part_sources = [
+        SimpleNamespace(
+            nodeName=item.get("nodeName"),
+            partBase=item.get("partBase"),
+            partName=item.get("partName"),
+            partId=item.get("partId"),
+            sourceSheet=item.get("sourceSheet"),
+        )
+        for item in (selected_parts or [])
+    ]
+    matched_templates = _filter_process_templates_for_selected_parts(
+        effective_process_templates,
+        selected_part_sources,
+    )
+
+    ranked: List[Dict[str, Any]] = []
+    requested_actions = _requested_process_actions_from_message(message_tokens)
+    for template in matched_templates:
+        if requested_part_families and not _part_matches_requested_families(
+            template,
+            requested_part_families,
+            message_tokens,
+        ):
+            continue
+
+        score, reasons = _score_candidate(
+            message_tokens,
+            template.get("label"),
+            template.get("partBase"),
+            template.get("sourceSheet"),
+            template.get("processKey"),
+        )
+        if requested_actions and _process_matches_requested_action(template, message_tokens):
+            score += 2.5
+            reasons.append("요청 액션 직접 일치")
+
+        if score <= 0 and requested_actions:
+            continue
+        if score <= 0:
+            score = 0.25
+            reasons.append("선택 부품 템플릿")
+
+        ranked.append(
+            _build_process_match_from_template(
+                template,
+                score=score,
+                reason=", ".join(dict.fromkeys(reasons)) or "선택 부품 빠른 추천",
+            )
+        )
+
+    ranked = _filter_process_matches_by_requested_context(
+        _dedupe_process_family_matches(ranked),
+        requested_part_families,
+        message_tokens,
+    )
+    ranked = _boost_requested_action_process_matches(
+        ranked,
+        effective_process_templates=effective_process_templates,
+        message_tokens=message_tokens,
+        limit=limit,
+    )[:limit]
+    ranked = _boost_connector_connection_process_matches(
+        ranked,
+        effective_process_templates=effective_process_templates,
+        message_tokens=message_tokens,
+        limit=limit,
+    )[:limit]
+    ranked = _prioritize_requested_action_part_base_matches(
+        ranked,
+        message_tokens=message_tokens,
+        limit=limit,
+    )[:limit]
+    return ranked
+
+
 def _recommend_processes_from_message_fallback(
     *,
     message_tokens: List[str],
@@ -2402,12 +2764,15 @@ def _recommend_processes_from_message_fallback(
     requested_actions = _requested_process_actions_from_message(message_tokens)
     requested_fastener = _message_requests_fastener(message_tokens)
     requested_fastener_types = _requested_fastener_types_from_message(message_tokens)
+    suppress_fastener_candidates = _message_prefers_connector_connection(message_tokens)
     ranked: List[Dict[str, Any]] = []
     seen_process_keys = set()
 
     for process in effective_process_templates or []:
         process_key = str(process.get("processKey") or "").strip()
         if not process_key or process_key in seen_process_keys:
+            continue
+        if suppress_fastener_candidates and _is_fastener_like_process_candidate(process):
             continue
 
         score, reasons = _score_candidate(
@@ -2563,6 +2928,9 @@ def _build_per_part_chat_recommendations(
     shared_process_pool = _dedupe_process_family_matches(list(shared_process_matches or []))
     ordered_parts = _dedupe_part_matches(part_matches)
     extraction_requested = "취출" in _requested_process_actions_from_message(message_tokens)
+    requested_fastener = _message_requests_fastener(message_tokens)
+    requested_fastener_types = _requested_fastener_types_from_message(message_tokens)
+    explicit_screw_requested = _message_requests_explicit_screw_text(message_text)
     extraction_process_match = (
         _build_requested_extraction_process_match(effective_process_templates)
         if extraction_requested
@@ -2592,7 +2960,13 @@ def _build_per_part_chat_recommendations(
         process_matches = [
             process
             for process in shared_process_pool
-            if _part_family_key(process.get("partBase") or process.get("contextPartBase") or "") == part_family
+            if (
+                _part_family_key(process.get("partBase") or process.get("contextPartBase") or "") == part_family
+                or (
+                    requested_fastener
+                    and _fastener_candidate_matches_requested_types(process, requested_fastener_types)
+                )
+            )
         ]
 
         if not process_matches:
@@ -2641,6 +3015,24 @@ def _build_per_part_chat_recommendations(
             message_tokens=message_tokens,
             limit=per_part_limit,
         )[:per_part_limit]
+
+        if explicit_screw_requested and not any(
+            _fastener_candidate_matches_requested_types(item, {"SCREW"})
+            for item in process_matches
+        ):
+            screw_candidates = [
+                _build_process_match_from_template(
+                    template,
+                    score=999.0,
+                    reason="스크류 체결 요청 보정",
+                )
+                for template in (effective_process_templates or [])
+                if _fastener_candidate_matches_requested_types(template, {"SCREW"})
+            ]
+            if screw_candidates:
+                process_matches = _dedupe_process_family_matches(
+                    [*screw_candidates, *process_matches]
+                )[:per_part_limit]
 
         if (
             extraction_requested
@@ -2713,14 +3105,9 @@ def _build_per_part_chat_recommendations(
 def _build_chat_part_matches_from_inputs(selected_parts: List[Any]) -> List[Dict[str, Any]]:
     part_matches: List[Dict[str, Any]] = []
     for index, part in enumerate(selected_parts or []):
-        part_base = str(
-            getattr(part, "partBase", None)
-            or getattr(part, "partId", None)
-            or getattr(part, "nodeName", None)
-            or getattr(part, "partName", None)
-            or ""
-        ).strip()
-        if not part_base:
+        part_base = str(getattr(part, "partBase", None) or "").strip()
+        source_sheet = str(getattr(part, "sourceSheet", None) or "").strip()
+        if not part_base or not source_sheet:
             continue
         part_matches.append(
             _build_db_part_recommendation(
@@ -2728,8 +3115,8 @@ def _build_chat_part_matches_from_inputs(selected_parts: List[Any]) -> List[Dict
                     "nodeName": getattr(part, "nodeName", None) or part_base,
                     "partId": getattr(part, "partId", None) or part_base,
                     "partName": getattr(part, "partName", None) or part_base,
-                    "partBase": getattr(part, "partBase", None) or part_base,
-                    "sourceSheet": str(getattr(part, "sourceSheet", None) or "").strip(),
+                    "partBase": part_base,
+                    "sourceSheet": source_sheet,
                 },
                 reason="선택 부품",
                 score=1000.0 - index,
@@ -2850,10 +3237,11 @@ def _build_chat_part_matches_without_ai(
     candidate_part_matches: List[Dict[str, Any]] = []
     for index, part in enumerate(candidate_parts or []):
         part_base = str(getattr(part, "partBase", None) or "").strip()
+        source_sheet = str(getattr(part, "sourceSheet", None) or "").strip()
         part_id = str(getattr(part, "partId", None) or "").strip()
         node_name = str(getattr(part, "nodeName", None) or "").strip()
         part_name = str(getattr(part, "partName", None) or "").strip()
-        if not any((part_base, part_id, node_name, part_name)):
+        if not part_base or not source_sheet:
             continue
         candidate_part_matches.append(
             _build_db_part_recommendation(
@@ -2861,8 +3249,8 @@ def _build_chat_part_matches_without_ai(
                     "nodeName": node_name or part_base or part_id or part_name,
                     "partId": part_id or part_base or node_name or part_name,
                     "partName": part_name or part_base or part_id or node_name,
-                    "partBase": part_base or part_id or node_name or part_name,
-                    "sourceSheet": str(getattr(part, "sourceSheet", None) or "").strip(),
+                    "partBase": part_base,
+                    "sourceSheet": source_sheet,
                     "treePath": list(getattr(part, "treePath", None) or []),
                     "parentName": getattr(part, "parentName", None),
                 },
@@ -4707,6 +5095,7 @@ def chat_sequence_recommendations(req: SequenceChatRequest):
     graph_part_matches: List[Dict[str, Any]] = []
     graph_process_matches: List[Dict[str, Any]] = []
     per_part_recommendations: List[Dict[str, Any]] = []
+    used_fast_path = False
 
     if not list(req.selectedParts or []) and not _message_is_sequence_chat_relevant(
         message_tokens,
@@ -4721,192 +5110,219 @@ def chat_sequence_recommendations(req: SequenceChatRequest):
             perPartRecommendations=[],
         )
 
-    try:
-        embedding_result = search_chat_candidates_with_bge_m3(
-            message,
-            candidate_parts=list(req.candidateParts or []),
-            process_templates=effective_process_templates,
-            part_limit=max(candidate_limit, 30),
-            process_limit=max(candidate_limit * 2, 60),
-        )
-        embedding_part_matches = [
-            _part_match_from_embedding_document(item)
-            for item in (embedding_result.get("parts") or [])
-        ]
-        embedding_part_matches = _filter_part_matches_by_requested_families(
-            embedding_part_matches,
-            requested_part_families,
-            message_tokens,
-        )
-        embedding_process_matches = [
-            _process_match_from_embedding_document(item)
-            for item in (embedding_result.get("processes") or [])
-            if str((item.get("item") or {}).get("processKey") if isinstance(item.get("item"), dict) else getattr(item.get("item"), "processKey", "") or "").strip()
-        ]
-        embedding_process_matches = _filter_process_matches_by_requested_context(
-            embedding_process_matches,
-            requested_part_families,
-            message_tokens,
-        )
-        _emit_sequence_recommend_log(
-            "CHAT_EMBEDDING_RESULT",
-            model="BAAI/bge-m3",
-            partCount=len(embedding_part_matches),
-            processCount=len(embedding_process_matches),
-            topParts=[
-                str(item.get("partBase") or item.get("partId") or item.get("nodeName") or "").strip()
-                for item in embedding_part_matches[:5]
-            ],
-            topProcesses=[
-                str(item.get("processKey") or "").strip()
-                for item in embedding_process_matches[:5]
-            ],
-        )
-    except Exception as exc:
-        logger.warning("bge-m3 chat embedding search failed; falling back to heuristic candidates: %s", exc)
-        _emit_sequence_recommend_log(
-            "CHAT_EMBEDDING_FAILED",
-            model="BAAI/bge-m3",
-            error=str(exc),
-        )
+    direct_message_part_matches = _build_direct_message_part_matches(
+        list(req.candidateParts or []),
+        message_tokens,
+        effective_process_templates=effective_process_templates,
+        limit=limit,
+    )
+    direct_message_part_matches = _apply_chat_part_display_labels(
+        direct_message_part_matches,
+        message_tokens,
+    )
 
-    try:
-        selected_seed_matches = [
-            _part_match_from_candidate_part(
-                part,
-                reason="선택 부품 graph traversal seed",
-                score=1.0,
-            )
-            for part in (req.selectedParts or [])
-        ]
-        graph_expanded = _expand_chat_candidates_by_graph(
-            seed_part_matches=[*selected_seed_matches, *embedding_part_matches],
-            seed_process_matches=embedding_process_matches,
-            candidate_parts=list(req.selectedParts or []) + list(req.candidateParts or []),
-            process_templates=effective_process_templates,
-            limit=max(candidate_limit, 20),
-        )
-        graph_part_matches = list(graph_expanded.get("parts") or [])
-        graph_part_matches = _filter_part_matches_by_requested_families(
-            graph_part_matches,
-            requested_part_families,
-            message_tokens,
-        )
-        graph_process_matches = list(graph_expanded.get("processes") or [])
-        graph_process_matches = _filter_process_matches_by_requested_context(
-            graph_process_matches,
-            requested_part_families,
-            message_tokens,
-        )
-        _emit_sequence_recommend_log(
-            "CHAT_GRAPH_TRAVERSAL_RESULT",
-            seedPartCount=len(selected_seed_matches) + len(embedding_part_matches),
-            seedProcessCount=len(embedding_process_matches),
-            partCount=len(graph_part_matches),
-            processCount=len(graph_process_matches),
-            topParts=[
-                str(item.get("partBase") or item.get("partId") or item.get("nodeName") or "").strip()
-                for item in graph_part_matches[:5]
-            ],
-            topProcesses=[
-                str(item.get("processKey") or item.get("label") or "").strip()
-                for item in graph_process_matches[:5]
-            ],
-        )
-    except Exception as exc:
-        logger.warning("Graph traversal expansion failed; falling back to embedding candidates: %s", exc)
-        _emit_sequence_recommend_log(
-            "CHAT_GRAPH_TRAVERSAL_FAILED",
-            error=str(exc),
-        )
-
-    try:
-        graph_or_embedding_part_matches = graph_part_matches or embedding_part_matches
-        message_process_matches = _recommend_processes_from_message_fallback(
-            message_tokens=message_tokens,
+    if direct_message_part_matches and not req.selectedParts:
+        fast_path_processes = _build_fast_path_process_matches(
+            direct_message_part_matches,
             effective_process_templates=effective_process_templates,
-            limit=max(candidate_limit, 20),
-        )
-        message_process_matches = _filter_process_matches_by_requested_context(
-            message_process_matches,
-            requested_part_families,
-            message_tokens,
-        )
-        template_process_candidates = _dedupe_process_family_matches(
-            [
-                *graph_process_matches,
-                *embedding_process_matches,
-                *message_process_matches,
-            ]
-        ) or [
-            {
-                "processKey": str(process.get("processKey") or "").strip(),
-                "label": process.get("label"),
-                "displayLabel": _resolve_process_display_label(process),
-                "operationLabel": process.get("label"),
-                "partBase": process.get("partBase"),
-                "contextPartBase": process.get("partBase"),
-                "sourceSheet": process.get("sourceSheet"),
-                "score": 1.0,
-                "reason": "AI 채팅 후보",
-            }
-            for process in effective_process_templates[:120]
-            if str(process.get("processKey") or "").strip()
-        ]
-        template_process_candidates = _filter_process_matches_by_requested_context(
-            template_process_candidates,
-            requested_part_families,
-            message_tokens,
-        )
-        ai_candidate_parts = list(req.selectedParts or []) + [
-            SimpleNamespace(
-                nodeName=item.get("nodeName"),
-                partBase=item.get("partBase"),
-                partName=item.get("partName"),
-                partId=item.get("partId"),
-                sourceSheet=item.get("sourceSheet"),
-                treePath=item.get("treePath") or [],
-                parentName=item.get("parentName"),
-            )
-            for item in (graph_or_embedding_part_matches or [])
-        ]
-        if _should_use_ai_chat_rerank(
             message_tokens=message_tokens,
             requested_part_families=requested_part_families,
-            selected_parts=list(req.selectedParts or []),
-            part_candidates=ai_candidate_parts,
-            process_candidates=template_process_candidates,
             limit=limit,
-        ):
-            recommended_parts, recommended_processes, ai_reply = _build_chat_part_matches_with_ai(
-                message,
-                selected_parts=list(req.selectedParts or []),
-                candidate_parts=ai_candidate_parts,
-                process_candidates=template_process_candidates,
-                limit=limit,
-            )
-        else:
-            recommended_parts, recommended_processes, ai_reply = _build_chat_part_matches_without_ai(
-                message,
-                selected_parts=list(req.selectedParts or []),
-                candidate_parts=ai_candidate_parts,
-                process_candidates=template_process_candidates,
-                limit=limit,
-            )
-        _emit_sequence_recommend_log(
-            "CHAT_AI_PROVIDER_RESULT",
-            partCount=len(recommended_parts),
-            processCount=len(recommended_processes),
-            reply=ai_reply,
         )
-    except Exception as exc:
-        logger.warning("Provider chat recommendation failed; falling back to heuristic ranking: %s", exc)
-        _emit_sequence_recommend_log(
-            "CHAT_AI_PROVIDER_FAILED",
-            error=str(exc),
-        )
+        if fast_path_processes:
+            recommended_parts = direct_message_part_matches
+            recommended_processes = fast_path_processes
+            used_fast_path = True
 
-    if recommended_parts:
+    if not used_fast_path:
+        try:
+            embedding_result = search_chat_candidates_with_bge_m3(
+                message,
+                candidate_parts=list(req.candidateParts or []),
+                process_templates=effective_process_templates,
+                part_limit=max(candidate_limit, 30),
+                process_limit=max(candidate_limit * 2, 60),
+            )
+            embedding_part_matches = [
+                _part_match_from_embedding_document(item)
+                for item in (embedding_result.get("parts") or [])
+            ]
+            embedding_part_matches = _filter_part_matches_by_requested_families(
+                embedding_part_matches,
+                requested_part_families,
+                message_tokens,
+            )
+            embedding_process_matches = [
+                _process_match_from_embedding_document(item)
+                for item in (embedding_result.get("processes") or [])
+                if str((item.get("item") or {}).get("processKey") if isinstance(item.get("item"), dict) else getattr(item.get("item"), "processKey", "") or "").strip()
+            ]
+            embedding_process_matches = _filter_process_matches_by_requested_context(
+                embedding_process_matches,
+                requested_part_families,
+                message_tokens,
+            )
+            _emit_sequence_recommend_log(
+                "CHAT_EMBEDDING_RESULT",
+                model="BAAI/bge-m3",
+                partCount=len(embedding_part_matches),
+                processCount=len(embedding_process_matches),
+                topParts=[
+                    str(item.get("partBase") or item.get("partId") or item.get("nodeName") or "").strip()
+                    for item in embedding_part_matches[:5]
+                ],
+                topProcesses=[
+                    str(item.get("processKey") or "").strip()
+                    for item in embedding_process_matches[:5]
+                ],
+            )
+        except Exception as exc:
+            logger.warning("bge-m3 chat embedding search failed; falling back to heuristic candidates: %s", exc)
+            _emit_sequence_recommend_log(
+                "CHAT_EMBEDDING_FAILED",
+                model="BAAI/bge-m3",
+                error=str(exc),
+            )
+
+    if not used_fast_path:
+        try:
+            selected_seed_matches = [
+                _part_match_from_candidate_part(
+                    part,
+                    reason="선택 부품 graph traversal seed",
+                    score=1.0,
+                )
+                for part in (req.selectedParts or [])
+            ]
+            graph_expanded = _expand_chat_candidates_by_graph(
+                seed_part_matches=[*selected_seed_matches, *embedding_part_matches],
+                seed_process_matches=embedding_process_matches,
+                candidate_parts=list(req.selectedParts or []) + list(req.candidateParts or []),
+                process_templates=effective_process_templates,
+                limit=max(candidate_limit, 20),
+            )
+            graph_part_matches = list(graph_expanded.get("parts") or [])
+            graph_part_matches = _filter_part_matches_by_requested_families(
+                graph_part_matches,
+                requested_part_families,
+                message_tokens,
+            )
+            graph_process_matches = list(graph_expanded.get("processes") or [])
+            graph_process_matches = _filter_process_matches_by_requested_context(
+                graph_process_matches,
+                requested_part_families,
+                message_tokens,
+            )
+            _emit_sequence_recommend_log(
+                "CHAT_GRAPH_TRAVERSAL_RESULT",
+                seedPartCount=len(selected_seed_matches) + len(embedding_part_matches),
+                seedProcessCount=len(embedding_process_matches),
+                partCount=len(graph_part_matches),
+                processCount=len(graph_process_matches),
+                topParts=[
+                    str(item.get("partBase") or item.get("partId") or item.get("nodeName") or "").strip()
+                    for item in graph_part_matches[:5]
+                ],
+                topProcesses=[
+                    str(item.get("processKey") or item.get("label") or "").strip()
+                    for item in graph_process_matches[:5]
+                ],
+            )
+        except Exception as exc:
+            logger.warning("Graph traversal expansion failed; falling back to embedding candidates: %s", exc)
+            _emit_sequence_recommend_log(
+                "CHAT_GRAPH_TRAVERSAL_FAILED",
+                error=str(exc),
+            )
+
+    if not used_fast_path:
+        try:
+            graph_or_embedding_part_matches = graph_part_matches or embedding_part_matches
+            message_process_matches = _recommend_processes_from_message_fallback(
+                message_tokens=message_tokens,
+                effective_process_templates=effective_process_templates,
+                limit=max(candidate_limit, 20),
+            )
+            message_process_matches = _filter_process_matches_by_requested_context(
+                message_process_matches,
+                requested_part_families,
+                message_tokens,
+            )
+            template_process_candidates = _dedupe_process_family_matches(
+                [
+                    *graph_process_matches,
+                    *embedding_process_matches,
+                    *message_process_matches,
+                ]
+            ) or [
+                {
+                    "processKey": str(process.get("processKey") or "").strip(),
+                    "label": process.get("label"),
+                    "displayLabel": _resolve_process_display_label(process),
+                    "operationLabel": process.get("label"),
+                    "partBase": process.get("partBase"),
+                    "contextPartBase": process.get("partBase"),
+                    "sourceSheet": process.get("sourceSheet"),
+                    "score": 1.0,
+                    "reason": "AI 채팅 후보",
+                }
+                for process in effective_process_templates[:120]
+                if str(process.get("processKey") or "").strip()
+            ]
+            template_process_candidates = _filter_process_matches_by_requested_context(
+                template_process_candidates,
+                requested_part_families,
+                message_tokens,
+            )
+            ai_candidate_parts = list(req.selectedParts or []) + [
+                SimpleNamespace(
+                    nodeName=item.get("nodeName"),
+                    partBase=item.get("partBase"),
+                    partName=item.get("partName"),
+                    partId=item.get("partId"),
+                    sourceSheet=item.get("sourceSheet"),
+                    treePath=item.get("treePath") or [],
+                    parentName=item.get("parentName"),
+                )
+                for item in (graph_or_embedding_part_matches or [])
+            ]
+            if _should_use_ai_chat_rerank(
+                message_tokens=message_tokens,
+                requested_part_families=requested_part_families,
+                selected_parts=list(req.selectedParts or []),
+                part_candidates=ai_candidate_parts,
+                process_candidates=template_process_candidates,
+                limit=limit,
+            ):
+                recommended_parts, recommended_processes, ai_reply = _build_chat_part_matches_with_ai(
+                    message,
+                    selected_parts=list(req.selectedParts or []),
+                    candidate_parts=ai_candidate_parts,
+                    process_candidates=template_process_candidates,
+                    limit=limit,
+                )
+            else:
+                recommended_parts, recommended_processes, ai_reply = _build_chat_part_matches_without_ai(
+                    message,
+                    selected_parts=list(req.selectedParts or []),
+                    candidate_parts=ai_candidate_parts,
+                    process_candidates=template_process_candidates,
+                    limit=limit,
+                )
+            _emit_sequence_recommend_log(
+                "CHAT_AI_PROVIDER_RESULT",
+                partCount=len(recommended_parts),
+                processCount=len(recommended_processes),
+                reply=ai_reply,
+            )
+        except Exception as exc:
+            logger.warning("Provider chat recommendation failed; falling back to heuristic ranking: %s", exc)
+            _emit_sequence_recommend_log(
+                "CHAT_AI_PROVIDER_FAILED",
+                error=str(exc),
+            )
+
+    if not used_fast_path and recommended_parts:
         process_source_parts = [
             SimpleNamespace(
                 nodeName=item.get("nodeName"),
@@ -4925,7 +5341,7 @@ def chat_sequence_recommendations(req: SequenceChatRequest):
                 message_tokens=message_tokens,
                 apply_message_adjustment=True,
             )
-    elif req.selectedParts:
+    elif not used_fast_path and req.selectedParts:
         selected_matches = _build_selected_part_matches(
             req.selectedParts,
             max(candidate_limit, len(req.selectedParts)),
@@ -4960,7 +5376,7 @@ def chat_sequence_recommendations(req: SequenceChatRequest):
             )
             for item in recommended_parts
         ]
-    elif req.candidateParts:
+    elif not used_fast_path and req.candidateParts:
         recommended_parts = _build_candidate_part_matches(
             req.candidateParts,
             message_tokens,
@@ -4970,6 +5386,10 @@ def chat_sequence_recommendations(req: SequenceChatRequest):
         recommended_parts = _filter_part_matches_by_requested_families(
             recommended_parts,
             requested_part_families,
+            message_tokens,
+        )
+        recommended_parts = _prioritize_direct_message_part_matches(
+            recommended_parts,
             message_tokens,
         )
         process_source_parts = [
@@ -4982,7 +5402,7 @@ def chat_sequence_recommendations(req: SequenceChatRequest):
             )
             for item in recommended_parts
         ]
-    else:
+    elif not used_fast_path:
         recommended_parts = []
         process_source_parts = []
 
@@ -4994,7 +5414,7 @@ def chat_sequence_recommendations(req: SequenceChatRequest):
             apply_message_adjustment=True,
         )
 
-    if not recommended_parts:
+    if not used_fast_path and not recommended_parts:
         recommended_processes = _recommend_processes_from_message_fallback(
             message_tokens=message_tokens,
             effective_process_templates=effective_process_templates,
@@ -5020,7 +5440,7 @@ def chat_sequence_recommendations(req: SequenceChatRequest):
             for item in recommended_parts
         ]
 
-    if not ai_reply:
+    if not used_fast_path and not ai_reply:
         try:
             recommended_parts, recommended_processes, ai_reply = _rerank_chat_part_matches_with_openai(
                 message,
@@ -5053,10 +5473,20 @@ def chat_sequence_recommendations(req: SequenceChatRequest):
         message_tokens=message_tokens,
         limit=limit,
     )[:limit]
+    recommended_processes = _boost_connector_connection_process_matches(
+        recommended_processes,
+        effective_process_templates=effective_process_templates,
+        message_tokens=message_tokens,
+        limit=limit,
+    )[:limit]
     recommended_processes = _prioritize_requested_action_part_base_matches(
         recommended_processes,
         message_tokens=message_tokens,
         limit=limit,
+    )[:limit]
+    recommended_processes = _filter_out_fastener_for_connector_connection(
+        recommended_processes,
+        message_tokens,
     )[:limit]
 
     recommended_parts = _dedupe_part_matches(recommended_parts)
@@ -5065,7 +5495,24 @@ def chat_sequence_recommendations(req: SequenceChatRequest):
         message_tokens,
         effective_process_templates,
     )
+    recommended_parts = _prioritize_direct_message_part_matches(
+        recommended_parts,
+        message_tokens,
+    )
     recommended_parts = _apply_chat_part_display_labels(recommended_parts, message_tokens)
+
+    if req.candidateParts and not req.selectedParts:
+        direct_message_part_matches = _build_direct_message_part_matches(
+            list(req.candidateParts or []),
+            message_tokens,
+            effective_process_templates=effective_process_templates,
+            limit=limit,
+        )
+        if direct_message_part_matches:
+            recommended_parts = _apply_chat_part_display_labels(
+                direct_message_part_matches,
+                message_tokens,
+            )
 
     recommended_options: List[Dict[str, Any]] = []
     for part in recommended_parts:
@@ -5163,6 +5610,10 @@ def chat_sequence_per_part_recommendations(req: SequenceChatPerPartRequest):
         message_tokens,
         effective_process_templates,
     )
+    part_matches = _prioritize_direct_message_part_matches(
+        part_matches,
+        message_tokens,
+    )
     part_matches = _apply_chat_part_display_labels(part_matches, message_tokens)
 
     if not part_matches:
@@ -5191,11 +5642,21 @@ def chat_sequence_per_part_recommendations(req: SequenceChatPerPartRequest):
         message_tokens=message_tokens,
         limit=max(candidate_limit, 20),
     )
+    shared_process_matches = _boost_connector_connection_process_matches(
+        shared_process_matches,
+        effective_process_templates=effective_process_templates,
+        message_tokens=message_tokens,
+        limit=max(candidate_limit, 20),
+    )
     shared_process_matches = _prioritize_requested_action_part_base_matches(
         shared_process_matches,
         message_tokens=message_tokens,
         limit=max(candidate_limit, 20),
     )
+    shared_process_matches = _filter_out_fastener_for_connector_connection(
+        shared_process_matches,
+        message_tokens,
+    )[: max(candidate_limit, 20)]
 
     per_part_recommendations = _build_per_part_chat_recommendations(
         part_matches=part_matches,

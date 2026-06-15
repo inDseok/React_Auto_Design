@@ -24,7 +24,6 @@ if configured_frontend_origin:
     frontend_origins.add(configured_frontend_origin)
 
 from backend.Sub.session_excel import get_or_create_sid, SessionState
-from backend.Sub.bom_service import create_bom_run, DATA_DIR
 from backend.sub_router import sub_router
 from backend.Assembly_router import router as assembly_router
 from backend.Seuqence_router import router as seuquence_router 

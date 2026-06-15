@@ -397,10 +397,6 @@ export default function LobPage() {
       expectedCt,
     };
   }, [movementTimes, tactMetrics.annualVehicles, workerStats]);
-  const equipmentTargetCt = useMemo(
-    () => workerTopMetrics.expectedCt * 0.9,
-    [workerTopMetrics.expectedCt]
-  );
   const normalizedEquipmentRows = useMemo(
     () =>
       equipmentRows.map((row) => {
@@ -416,6 +412,33 @@ export default function LobPage() {
       }),
     [equipmentRows]
   );
+  const visibleEquipmentRows = useMemo(
+    () =>
+      normalizedEquipmentRows.filter(
+        (row) => row.name.trim() || row.totalTime > 0 || row.investmentCost || row.improvementNote
+      ),
+    [normalizedEquipmentRows]
+  );
+  const equipmentLobPercent = useMemo(() => {
+    if (visibleEquipmentRows.length === 0) {
+      return 0;
+    }
+
+    const totalEquipmentTime = visibleEquipmentRows.reduce(
+      (sum, row) => sum + row.totalTime,
+      0
+    );
+    const maxEquipmentTime = visibleEquipmentRows.reduce(
+      (max, row) => Math.max(max, row.totalTime),
+      0
+    );
+
+    if (maxEquipmentTime <= 0) {
+      return 0;
+    }
+
+    return (totalEquipmentTime / (maxEquipmentTime * visibleEquipmentRows.length)) * 100;
+  }, [visibleEquipmentRows]);
   const processDesignMetrics = useMemo(
     () => buildProcessDesignMetricsFromRows(rows, tactMetrics, movementTimes),
     [movementTimes, rows, tactMetrics]
@@ -630,10 +653,6 @@ export default function LobPage() {
           </section>
         ) : activeView === "tact" ? (
           <TactTimeSection inputs={tactInputs} onChange={handleTactInputChange} />
-        ) : workerStats.length === 0 ? (
-          <section style={emptyStateStyle}>
-            분석할 작업자 LOB 데이터가 없습니다. 조립 총공수 페이지에서 저장된 데이터의 `작업자`, `no`, `TOTAL` 값을 먼저 확인하세요.
-          </section>
         ) : activeView === "equipment" ? (
           <>
             <section style={equipmentSummaryGridStyle}>
@@ -643,14 +662,9 @@ export default function LobPage() {
                 accent="#0f766e"
               />
               <SummaryCard
-                title="예상 C/T"
-                value={formatCardNumber(workerTopMetrics.expectedCt, 2, " sec")}
-                accent="#b91c1c"
-              />
-              <SummaryCard
-                title="설비 목표 C/T"
-                value={formatCardNumber(equipmentTargetCt, 2, " sec")}
-                accent="#1d4ed8"
+                title="설비 LOB"
+                value={formatRatio(equipmentLobPercent)}
+                accent="#7c3aed"
               />
             </section>
 
@@ -854,9 +868,7 @@ export default function LobPage() {
             </section>
 
             <EquipmentStackedBarChart
-              equipmentRows={normalizedEquipmentRows.filter(
-                (row) => row.name.trim() || row.totalTime > 0 || row.investmentCost || row.improvementNote
-              )}
+              equipmentRows={visibleEquipmentRows}
             />
           </>
         ) : activeView === "process-design" ? (
@@ -866,6 +878,10 @@ export default function LobPage() {
             specOptions={bomSpecs}
             onChangeSpec={setSelectedProcessDesignSpec}
           />
+        ) : workerStats.length === 0 ? (
+          <section style={emptyStateStyle}>
+            작업자 데이터가 없습니다.
+          </section>
         ) : (
           <>
             <section style={workerSummaryGridStyle}>

@@ -7,7 +7,7 @@ import SelectedPartPanel from "./SelectedPartPanel";
 import SpecSelector from "./SpecSelector";
 import UploadBom from "./UploadBom";
 import { Button, Spin, Alert, Card, Row, Col, Space, message } from "antd";
-import { getDisplaySpecName } from "../Sequence/sequenceEditorUtils";
+import { getDisplaySpecName, isManualSequenceSpec } from "../Sequence/sequenceEditorUtils";
 import { showPopup } from "../../template/popupUtils";
 import ConfirmPopup from "../../template/ConfirmPopup";
 
@@ -59,6 +59,10 @@ function buildTree(nodes) {
 function makeTreeCacheKey(bomId, spec) {
   if (!bomId || !spec) return "";
   return `${bomId}::${spec}`;
+}
+
+function getSubSpecDisplayName(spec) {
+  return isManualSequenceSpec(spec) ? "수동" : getDisplaySpecName(spec);
 }
 
 function cloneNodesSnapshot(nodes) {
@@ -235,7 +239,7 @@ export default function SubPage() {
   
 
   const treeRoots = useMemo(() => buildTree(nodes), [nodes]);
-  const selectedSpecLabel = getDisplaySpecName(state.selectedSpec);
+  const selectedSpecLabel = getSubSpecDisplayName(state.selectedSpec);
 
   async function handleDeleteSelectedNode() {
     if (!state.bomId || !state.selectedSpec || !selectedNode) {

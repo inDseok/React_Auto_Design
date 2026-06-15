@@ -8,7 +8,7 @@ import {
   deleteRow,
   deleteGroup,
   updateCell,
-  deleteOptionGroup,
+  deletePartBlock,
 } from "./rowActions";
 import { useApp } from "../../state/AppContext";
 import SavedPopup from "../../template/SavedPopup";
@@ -379,9 +379,8 @@ function AssemblyPage() {
       __isNew: false,
     }));
 
-    const sortedRestored = sortRowsByWorkerWithinGroups(restored);
-    setRows(sortedRestored);
-    const restoredSnapshot = getRowsSnapshot(sortedRestored);
+    setRows(restored);
+    const restoredSnapshot = getRowsSnapshot(restored);
     lastSavedRowsSnapshotRef.current = restoredSnapshot;
     if (!silent) showPopup("불러오기 완료", "success");
     return true;
@@ -414,7 +413,7 @@ function AssemblyPage() {
       })
     );
 
-    setRows(sortRowsByWorkerWithinGroups(autoRows));
+    setRows(autoRows);
     setSelectedSheet("");
     setSelectedPart("");
     setSelectedOption("");
@@ -791,8 +790,8 @@ function AssemblyPage() {
     setShowConfirmReset(false);
   };
   
-  const handleDeleteOptionGroup = (partKey, optionValue) => {
-    setRows((prev) => deleteOptionGroup(prev, partKey, optionValue));
+  const handleDeletePartBlock = (groupKey, partInstanceKey, partBase) => {
+    setRows((prev) => deletePartBlock(prev, groupKey, partInstanceKey, partBase));
   };
 
   const handleGroupLabelChange = (groupKey, value) => {
@@ -875,7 +874,7 @@ function AssemblyPage() {
         onDeleteGroup={handleDeleteGroup}
         onCellChange={handleCellChange}
         onRowsChange={(nextRows) => setRows(nextRows)}
-        onDeleteOptionGroup={handleDeleteOptionGroup}
+        onDeletePartBlock={handleDeletePartBlock}
         onGroupLabelChange={handleGroupLabelChange}
       />
 

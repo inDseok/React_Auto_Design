@@ -16,7 +16,8 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pathlib import Path
 
 from backend.models import SubNodePatch, SubTree, SubTreeRestoreRequest, MoveNodeRequest, SubNode, NodeType, TreeMeta
-from backend.Sub.bom_service import create_bom_run
+from backend.Sub.bom_service import BOM_RUNS_DIR
+from backend.Sub.job_service import enqueue_bom_import_job, get_active_workers, get_bom_status, get_job
 from backend.Sub.utills import load_tree_json, save_tree_json, read_bom_meta, read_spec_meta
 from backend.Sub.excel_loader import build_tree_from_sheet
 from typing import Optional
@@ -139,37 +140,50 @@ def _load_or_create_tree(root_dir: Path, bom_id: str, spec: str) -> SubTree:
         save_tree_json(root_dir, spec, tree)
         return tree
 
+@sub_router.get("/jobs/{job_id}")
+def get_sub_job(job_id: str):
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다.")
+    return job
+
+
+@sub_router.get("/workers")
+def get_sub_workers():
+    return {"items": get_active_workers()}
+
+
+@sub_router.get("/bom/{bom_id}/status")
+def get_bom_processing_status(bom_id: str):
+    return get_bom_status(bom_id)
+
+
 @sub_router.post("/bom/upload")
-async def upload_bom(file: UploadFile = File(...)):
+async def upload_bom(
+    request: Request,
+    response: Response,
+    file: UploadFile = File(...),
+):
     binary = await file.read()
     try:
-        meta = create_bom_run(binary, file.filename)
-
-        # 🔹 bom_filename 저장
-        root = DATA_DIR / "bom_runs" / meta["bom_id"]
-        bom_meta_path = root / "bom_meta.json"
-        bom_meta_path.write_text(
-            json.dumps(
-                {
-                    "bom_id": meta["bom_id"],
-                    "bom_filename": file.filename,
-                },
-                ensure_ascii=False,
-                indent=2
-            ),
-            encoding="utf-8"
-        )
-
-        return meta
+        sid = get_or_create_sid(request, response)
+        job = enqueue_bom_import_job(binary, file.filename or "bom.xlsx", owner_sid=sid)
+        return job
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @sub_router.get("/bom/{bom_id}/specs")
 def list_specs(bom_id: str):
-    root = DATA_DIR / "bom_runs" / bom_id
+    root = BOM_RUNS_DIR / bom_id
     if not root.exists():
         return [_manual_sequence_spec_for_bom(bom_id)]
+
+    status = get_bom_status(bom_id)
+    if status.get("status") in {"queued", "running", "pending"}:
+        return []
+    if status.get("status") == "failed":
+        raise HTTPException(status_code=409, detail=status.get("error_message") or "BOM 분석 작업이 실패했습니다.")
 
     spec_meta = read_spec_meta(root)
 
@@ -222,7 +236,14 @@ def get_part_suggestions(
     part_no: Optional[str] = None,
     limit: int = 5,
 ):
-    root_dir = DATA_DIR / "bom_runs" / bom_id
+    status = get_bom_status(bom_id)
+    if status.get("status") != "completed":
+        raise HTTPException(
+            status_code=409,
+            detail=status.get("message") or "BOM 분석이 아직 완료되지 않았습니다.",
+        )
+
+    root_dir = BOM_RUNS_DIR / bom_id
     json_path = root_dir / f"{spec}.json"
 
     if not json_path.exists():
@@ -249,7 +270,15 @@ def get_tree(
     if not resolved_spec:
         raise HTTPException(status_code=400, detail="spec이 없습니다.")
 
-    root_dir = DATA_DIR / "bom_runs" / bom_id
+    if not _is_manual_sequence_spec(resolved_spec):
+        status = get_bom_status(bom_id)
+        if status.get("status") != "completed":
+            raise HTTPException(
+                status_code=409,
+                detail=status.get("message") or "BOM 분석이 아직 완료되지 않았습니다.",
+            )
+
+    root_dir = BOM_RUNS_DIR / bom_id
     try:
         tree = _load_or_create_tree(root_dir, bom_id, resolved_spec)
     except FileNotFoundError:
@@ -299,7 +328,7 @@ def patch_node(
     if not resolved_spec:
         raise HTTPException(status_code=400, detail="spec 없음")
 
-    root_dir = DATA_DIR / "bom_runs" / bom_id
+    root_dir = BOM_RUNS_DIR / bom_id
 
     tree = _load_or_create_tree(root_dir, bom_id, resolved_spec)
     nodes = tree.nodes
@@ -368,7 +397,7 @@ def restore_tree(
     if not resolved_spec:
         raise HTTPException(status_code=400, detail="spec 없음")
 
-    root_dir = DATA_DIR / "bom_runs" / bom_id
+    root_dir = BOM_RUNS_DIR / bom_id
     tree = _load_or_create_tree(root_dir, bom_id, resolved_spec)
     tree.nodes = payload.nodes
 
@@ -390,7 +419,7 @@ def move_node(
     spec: str,
     req: MoveNodeRequest
 ):
-    root_dir = DATA_DIR / "bom_runs" / bom_id
+    root_dir = BOM_RUNS_DIR / bom_id
     tree = _load_or_create_tree(root_dir, bom_id, spec)
 
     nodes = tree.nodes
@@ -466,7 +495,7 @@ def create_node(
     if not resolved_spec:
         raise HTTPException(status_code=400, detail="spec 없음")
 
-    root_dir = DATA_DIR / "bom_runs" / bom_id
+    root_dir = BOM_RUNS_DIR / bom_id
     tree = _load_or_create_tree(root_dir, bom_id, resolved_spec)
     nodes = tree.nodes
 
@@ -549,7 +578,7 @@ def delete_node(
     if not resolved_spec:
         raise HTTPException(status_code=400, detail="spec 없음")
 
-    root_dir = DATA_DIR / "bom_runs" / bom_id
+    root_dir = BOM_RUNS_DIR / bom_id
 
     tree = _load_or_create_tree(root_dir, bom_id, resolved_spec)
     nodes = tree.nodes
@@ -607,7 +636,7 @@ def add_node(
     if not resolved_spec:
         raise HTTPException(status_code=400, detail="spec 없음")
 
-    root_dir = DATA_DIR / "bom_runs" / bom_id
+    root_dir = BOM_RUNS_DIR / bom_id
 
     # 1️⃣ JSON 트리 로드
     tree = _load_or_create_tree(root_dir, bom_id, resolved_spec)
@@ -660,7 +689,7 @@ def add_node(
 @sub_router.get("/bom/{bom_id}/export_excel")
 async def export_excel(bom_id: str, spec: str):
 
-    root = DATA_DIR / "bom_runs" / bom_id
+    root = BOM_RUNS_DIR / bom_id
     json_path = root / f"{spec}.json"
 
     with open(json_path, "r", encoding="utf-8") as f:
@@ -679,13 +708,13 @@ async def export_excel(bom_id: str, spec: str):
 
 @sub_router.post("/bom/{bom_id}/export_excel_bundle")
 async def export_excel_bundle(bom_id: str, payload: Optional[ExcelBundleExportRequest] = None):
-    root = DATA_DIR / "bom_runs" / bom_id
+    root = BOM_RUNS_DIR / bom_id
     if not root.exists():
         raise HTTPException(status_code=404, detail="BOM 폴더가 없습니다.")
 
     sub_json_paths = sorted(
         path for path in root.glob("*.json")
-        if path.name not in {"bom_meta.json", "meta_spec.json"}
+        if path.name not in {"bom_meta.json", "meta_spec.json", "processing_status.json"}
         and not path.name.endswith("_cache.json")
         and not path.name.endswith("_sequence.json")
         and not path.name.endswith("_assembly.json")

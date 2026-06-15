@@ -148,10 +148,22 @@ export function deleteGroup(rows, groupKey) {
   return rows.filter((r) => r.__groupKey !== groupKey);
 }
 
-export function deleteOptionGroup(rows, partKey, optionValue) {
-  return rows.filter(
-    (r) => !(r.__groupKey === partKey && r["OPTION"] === optionValue)
-  );
+export function deletePartBlock(rows, groupKey, partInstanceKey, partBase) {
+  const normalizedInstanceKey = String(partInstanceKey ?? "").trim();
+  const normalizedPartBase = String(partBase ?? "").trim();
+
+  return rows.filter((row) => {
+    if (row.__groupKey !== groupKey) {
+      return true;
+    }
+
+    const rowInstanceKey = String(row.__partInstanceKey ?? "").trim();
+    if (normalizedInstanceKey) {
+      return rowInstanceKey !== normalizedInstanceKey;
+    }
+
+    return String(row["부품 기준"] ?? "").trim() !== normalizedPartBase;
+  });
 }
 
 // -----------------------------

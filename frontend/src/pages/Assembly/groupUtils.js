@@ -1,7 +1,7 @@
 // src/.../groupUtils.js
 // 최종본: "부품 기준", "요소작업", "OPTION"은 서로 독립 병합
 // - 병합/상속은 같은 __groupKey 안에서만 수행
-// - __isNew === true 행은 상속/병합 모두 금지(항상 단독)
+// - __isNew === true, __manualCustom === true 행은 상속/병합 모두 금지(항상 단독)
 // - 상속은 "엑셀 빈칸"만 채움(실제 값이 있으면 유지)
 // - 삭제해도 아래 행은 같은 그룹 내에서 계속 상속되어 "이어져 보임" (요구사항 YES)
 
@@ -10,10 +10,11 @@ export function computeRowspanInfo(rows) {
 
   const result = rows.map((r) => ({ ...r }));
   const columns = ["부품 기준", "요소작업", "OPTION"];
+  const isStandaloneRow = (row) => row?.__isNew || row?.__manualCustom === true;
 
   const getMergeUnitKey = (row) => row.__partInstanceKey ?? row["부품 기준"] ?? null;
 
-  // 1) 값 상속: 같은 그룹(__groupKey) 안에서만, __isNew 제외
+  // 1) 값 상속: 같은 그룹(__groupKey) 안에서만, standalone 행 제외
   for (const col of columns) {
     let lastValue = null;
     let lastGroupKey = null;
@@ -21,7 +22,8 @@ export function computeRowspanInfo(rows) {
     for (let i = 0; i < result.length; i++) {
       const row = result[i];
   
-      if (row.__isNew) {
+      if (isStandaloneRow(row)) {
+        lastValue = null;
         continue;
       }
   
@@ -29,6 +31,7 @@ export function computeRowspanInfo(rows) {
   
       if (gk !== lastGroupKey) {
         lastGroupKey = gk;
+        lastValue = null;
       }
   
       const val = row[col];
@@ -61,8 +64,8 @@ export function computeRowspanInfo(rows) {
     while (i < result.length) {
       const row = result[i];
 
-      // 새 행은 항상 단독
-      if (row.__isNew) {
+      // standalone 행은 항상 단독
+      if (isStandaloneRow(row)) {
         row[showKey] = true;
         row[spanKey] = 1;
         i += 1;
@@ -76,8 +79,8 @@ export function computeRowspanInfo(rows) {
       while (j < result.length) {
         const next = result[j];
 
-        // 새 행이면 병합 경계
-        if (next.__isNew) break;
+        // standalone 행이면 병합 경계
+        if (isStandaloneRow(next)) break;
 
         // 그룹이 바뀌면 병합 경계
         if ((next.__groupKey ?? null) !== baseGroupKey) break;

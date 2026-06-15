@@ -259,7 +259,15 @@ export default function SequenceInspector({
     const partBase = selectedNodePartBase;
     const sourceSheet = selectedNodeSourceSheet;
     const processLabel = selectedNodeLabel;
+    const isManualCustom = selectedNode?.data?.manualCustom === true;
     if (!partBase) {
+      setOptions([]);
+      setOptionLoading(false);
+      setOptionError(null);
+      return;
+    }
+
+    if (isManualCustom) {
       setOptions([]);
       setOptionLoading(false);
       setOptionError(null);
@@ -372,6 +380,7 @@ export default function SequenceInspector({
     selectedNodeLabel,
     selectedNodePartBase,
     selectedNodeSourceSheet,
+    selectedNode,
     selectedNodeType,
   ]);
 

@@ -1,7 +1,7 @@
 import React, { useRef, useState } from "react";
 import { useApp } from "../../state/AppContext";
 import { apiUpload } from "../../api/client";
-import { Upload, Button, Alert, Spin, Typography } from "antd";
+import { Upload, Button, Alert, Spin, Typography, message } from "antd";
 import { UploadOutlined } from "@ant-design/icons";
 
 const { Text } = Typography;
@@ -40,13 +40,13 @@ export default function UploadBom() {
       }
 
       actions.setBomContext(data.bom_id);
-      actions.setSelectedSpec?.(null);
+      actions.setSpec?.(null);
       actions.setSelectedNode?.(null);
       actions.clearTreeCache?.();
 
       localStorage.setItem("bom_id", data.bom_id);
 
-      console.log("NEW bomId:", data.bom_id);
+      message.success("업로드가 접수되었습니다. BOM 분석을 시작합니다.");
 
       setFile(null);
     } catch (e) {
@@ -60,7 +60,7 @@ export default function UploadBom() {
   return (
     <div style={{ marginBottom: 12 }}>
 
-      <Spin spinning={loading} tip="업로드 중...">
+      <Spin spinning={loading} tip="업로드를 접수하는 중...">
 
         <Upload
           beforeUpload={beforeUpload}

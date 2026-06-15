@@ -87,6 +87,232 @@ const normalizeRecommendationKey = (value) =>
     .replace(/\s+/g, " ")
     .trim();
 
+const extractDirectMessagePartHints = (message) => {
+  const normalized = normalizeRecommendationKey(message);
+  const hints = new Set();
+
+  if (
+    normalized.includes("HEAT SINK") ||
+    normalized.includes("히트싱크") ||
+    normalized.includes("히트 싱크") ||
+    normalized.includes("H/S")
+  ) {
+    hints.add("HEAT SINK");
+  }
+
+  if (
+    normalized.includes("LAM") ||
+    normalized.includes("램") ||
+    normalized.includes("람")
+  ) {
+    hints.add("LAM");
+  }
+
+  if (
+    normalized.includes("BEZEL") ||
+    normalized.includes("베젤")
+  ) {
+    hints.add("BEZEL");
+  }
+
+  if (
+    normalized.includes("LENS") ||
+    normalized.includes("렌즈")
+  ) {
+    hints.add("LENS");
+  }
+
+  if (
+    normalized.includes("HOUSING") ||
+    normalized.includes("하우징") ||
+    normalized.includes("HSG")
+  ) {
+    hints.add("HOUSING");
+  }
+
+  if (
+    normalized.includes("REFLECTOR") ||
+    normalized.includes("반사경")
+  ) {
+    hints.add("REFLECTOR");
+  }
+
+  if (
+    normalized.includes("BUMPER BRACKET") ||
+    normalized.includes("BUMPER BRKT") ||
+    normalized.includes("범퍼브라켓") ||
+    normalized.includes("범퍼 브라켓")
+  ) {
+    hints.add("BUMPER BRACKET");
+  }
+
+  if (
+    normalized.includes("BRACKET") ||
+    normalized.includes("BRKT") ||
+    normalized.includes("브라켓")
+  ) {
+    hints.add("BRACKET");
+  }
+
+  if (
+    normalized.includes("BUMPER") ||
+    normalized.includes("범퍼")
+  ) {
+    hints.add("BUMPER");
+  }
+
+  if (
+    normalized.includes("DECO BEZEL") ||
+    normalized.includes("데코 베젤")
+  ) {
+    hints.add("DECO BEZEL");
+  }
+
+  if (
+    normalized.includes("INNER BEZEL") ||
+    normalized.includes("이너 베젤") ||
+    normalized.includes("띠베젤")
+  ) {
+    hints.add("INNER BEZEL");
+  }
+
+  if (
+    normalized.includes("모듈") ||
+    normalized.includes("MODULE")
+  ) {
+    hints.add("MODULE_TEXT");
+  }
+
+  return hints;
+};
+
+const partMatchesDirectMessageHints = (part, hints) => {
+  if (!part || !hints?.size) {
+    return false;
+  }
+
+  const haystack = [
+    part?.displayLabel,
+    part?.partBase,
+    part?.partName,
+    part?.partId,
+    part?.nodeName,
+    part?.sourceSheet,
+  ]
+    .map((value) => normalizeRecommendationKey(value))
+    .filter(Boolean)
+    .join(" ");
+
+  if (!haystack) {
+    return false;
+  }
+
+  for (const hint of hints) {
+    if (hint === "MODULE_TEXT") {
+      if (haystack.includes("모듈") || haystack.includes("MODULE")) {
+        return true;
+      }
+      continue;
+    }
+    if (haystack.includes(hint)) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
+const filterItemsToRequestedParts = (items, message) => {
+  const hints = extractDirectMessagePartHints(message);
+  if (!hints.size) {
+    return Array.isArray(items) ? items : [];
+  }
+
+  const filtered = (Array.isArray(items) ? items : []).filter((item) =>
+    partMatchesDirectMessageHints(
+      {
+        ...item?.partData,
+        displayLabel: item?.partLabel,
+      },
+      hints
+    )
+  );
+
+  return filtered.length ? filtered : (Array.isArray(items) ? items : []);
+};
+
+const dedupeRecommendedProcesses = (processes) => {
+  const deduped = [];
+  const seen = new Set();
+
+  for (const process of Array.isArray(processes) ? processes : []) {
+    const dedupeKey = [
+      process?.partBase,
+      process?.contextPartBase,
+      process?.label,
+      process?.displayLabel,
+      process?.operationLabel,
+    ]
+      .map((value) => normalizeRecommendationKey(value))
+      .filter(Boolean)
+      .join("::");
+
+    const fallbackKey = normalizeRecommendationKey(process?.processKey);
+    const key = dedupeKey || fallbackKey;
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(process);
+  }
+
+  return deduped;
+};
+
+const dedupeRecommendationItems = (items) => {
+  const merged = [];
+  const indexByKey = new Map();
+
+  for (const item of Array.isArray(items) ? items : []) {
+    const displayKey = normalizeRecommendationKey(item?.partLabel);
+    const fallbackKey = [
+      item?.partData?.partBase,
+      item?.partData?.partName,
+      item?.partData?.nodeName,
+      item?.partData?.partId,
+    ]
+      .map((value) => normalizeRecommendationKey(value))
+      .filter(Boolean)
+      .join("::");
+    const key = displayKey || fallbackKey;
+    if (!key) {
+      merged.push(item);
+      continue;
+    }
+
+    const existingIndex = indexByKey.get(key);
+    if (existingIndex === undefined) {
+      indexByKey.set(key, merged.length);
+      merged.push({
+        ...item,
+        processes: dedupeRecommendedProcesses(item?.processes || []),
+      });
+      continue;
+    }
+
+    const existing = merged[existingIndex];
+    merged[existingIndex] = {
+      ...existing,
+      itemKey: existing?.itemKey || item?.itemKey,
+      reply: existing?.reply || item?.reply || "",
+      partOptions: Array.from(new Set([...(existing?.partOptions || []), ...(item?.partOptions || [])])),
+      processes: dedupeRecommendedProcesses([...(existing?.processes || []), ...(item?.processes || [])]),
+    };
+  }
+
+  return merged;
+};
+
 const buildPartLookupCandidates = (partLike) =>
   Array.from(
     new Set(
@@ -158,8 +384,18 @@ const filterRedundantPartRecommendations = (processes, currentPart, selectedPart
   });
 };
 
-const messageRequestsFastener = (message) =>
-  /스크류|체결|볼트|나사|t\/?\s*screw|m\/?\s*screw|fastener/i.test(String(message || ""));
+const messagePrefersConnectorConnection = (message) =>
+  /커넥터|connector|연결|커넥팅|connecting|wire|wiring|하네스|harness|coupler|socket/i.test(
+    String(message || "")
+  );
+
+const messageRequestsFastener = (message) => {
+  const normalized = String(message || "");
+  if (messagePrefersConnectorConnection(normalized)) {
+    return /스크류|볼트|나사|t\/?\s*screw|m\/?\s*screw|fastener/i.test(normalized);
+  }
+  return /스크류|체결|볼트|나사|t\/?\s*screw|m\/?\s*screw|fastener/i.test(normalized);
+};
 
 const messageRequestsExtraction = (message) =>
   /취출|배출|꺼내|꺼냄|언로딩|unload|take\s*out|extract/i.test(String(message || ""));
@@ -563,6 +799,8 @@ export default function SequenceEditor() {
   const runtimeIdRef = useRef(0);
   const sequenceClipboardRef = useRef(null);
   const pasteSequenceCountRef = useRef(0);
+  const partOptionsCacheRef = useRef(new Map());
+  const processOptionsCacheRef = useRef(new Map());
   const HISTORY_LIMIT = 80;
 
   const nodes = flowState.nodes;
@@ -852,6 +1090,7 @@ export default function SequenceEditor() {
   const [manualPartBase, setManualPartBase] = useState("");
   const [manualAllParts, setManualAllParts] = useState([]);
   const [manualSearchKey, setManualSearchKey] = useState("");
+  const [manualCustomPartName, setManualCustomPartName] = useState("");
   const [selectedPalettePartNodeNames, setSelectedPalettePartNodeNames] = useState([]);
   const selectedPaletteParts = useMemo(
     () =>
@@ -1140,6 +1379,52 @@ export default function SequenceEditor() {
     setManualSearchKey("");
   }, [applyFlowChange, getRecommendedNodeAnchor, manualSearchKey, nextRuntimeId]);
 
+  const addCustomManualNode = useCallback(() => {
+    const resolvedPartLabel = String(manualCustomPartName || "").trim();
+    if (!resolvedPartLabel) {
+      showPopup("직접 추가할 부품명을 입력하세요.", "warning");
+      return;
+    }
+
+    applyFlowChange((prev) => {
+      const anchor = getRecommendedNodeAnchor(prev.nodes || [], prev.groups || []);
+      return {
+        ...prev,
+        nodes: [
+          ...prev.nodes,
+          {
+            id: nextRuntimeId("N-PART"),
+            type: "PART",
+            position: {
+              x: anchor.startX,
+              y: anchor.startY,
+            },
+            data: {
+              nodeName: resolvedPartLabel,
+              partId: resolvedPartLabel,
+              partName: resolvedPartLabel,
+              partBase: resolvedPartLabel,
+              displayLabel: resolvedPartLabel,
+              sourceSheet: "",
+              option: "",
+              inhouse: true,
+              statusLabel: "조립 총공수에서 옵션/동작요소 입력",
+              manualAdded: true,
+              manualCustom: true,
+            },
+          },
+        ],
+      };
+    });
+
+    setManualCustomPartName("");
+  }, [
+    applyFlowChange,
+    getRecommendedNodeAnchor,
+    manualCustomPartName,
+    nextRuntimeId,
+  ]);
+
   const ensurePartsVisibleOnCanvas = useCallback(
     (partsToEnsure) => {
       const safeParts = Array.isArray(partsToEnsure) ? partsToEnsure.filter(Boolean) : [];
@@ -1274,6 +1559,7 @@ export default function SequenceEditor() {
                 statusLabel: "추천 기준 부품",
                 label:
                   sourcePart?.partBase ||
+                  recommendationItem?.partData?.partBase ||
                   recommendationItem?.partLabel ||
                   recommendationItem?.partNodeName ||
                   "",
@@ -1364,6 +1650,7 @@ export default function SequenceEditor() {
               statusLabel: "추천 기준 부품",
               label:
                 sourcePart?.partBase ||
+                recommendationItem?.partData?.partBase ||
                 recommendationItem?.partLabel ||
                 recommendationItem?.partNodeName ||
                 "",
@@ -1864,9 +2151,9 @@ export default function SequenceEditor() {
               },
               data: {
                 displayLabel:
+                  effectivePartData?.partBase ||
                   effectivePartData?.displayLabel ||
                   item?.partLabel ||
-                  effectivePartData?.partBase ||
                   effectivePartData?.partName ||
                   effectivePartData?.partId ||
                   item?.partNodeName ||
@@ -1896,8 +2183,8 @@ export default function SequenceEditor() {
                   "",
                 statusLabel: "추천 기준 부품",
                 label:
-                  effectivePartData?.displayLabel ||
                   effectivePartData?.partBase ||
+                  effectivePartData?.displayLabel ||
                   item?.partLabel ||
                   item?.partNodeName ||
                   "",
@@ -2543,6 +2830,10 @@ export default function SequenceEditor() {
     if (!lookupCandidates.length) {
       return [];
     }
+    const cacheKey = `${String(sourceSheet || "").trim()}::${lookupCandidates.join("||")}`;
+    if (partOptionsCacheRef.current.has(cacheKey)) {
+      return partOptionsCacheRef.current.get(cacheKey);
+    }
 
     const fetchOptions = async (candidatePartBase, sheet = "") => {
       const response = await fetch(
@@ -2564,6 +2855,7 @@ export default function SequenceEditor() {
       const primaryOptions = await fetchOptions(candidatePartBase, sourceSheet);
       if (primaryOptions.length || !sourceSheet) {
         if (primaryOptions.length) {
+          partOptionsCacheRef.current.set(cacheKey, primaryOptions);
           return primaryOptions;
         }
         continue;
@@ -2571,18 +2863,28 @@ export default function SequenceEditor() {
 
       const fallbackOptions = await fetchOptions(candidatePartBase, "");
       if (fallbackOptions.length) {
+        partOptionsCacheRef.current.set(cacheKey, fallbackOptions);
         return fallbackOptions;
       }
     }
 
+    partOptionsCacheRef.current.set(cacheKey, []);
     return [];
-  }, []);
+  }, [API_BASE]);
 
   const requestProcessOptions = useCallback(async ({ partBase, processLabel, sourceSheet = "" }) => {
     const normalizedPartBase = String(partBase || "").trim();
     const normalizedProcessLabel = String(processLabel || "").trim();
     if (!normalizedPartBase || !normalizedProcessLabel) {
       return [];
+    }
+    const cacheKey = [
+      normalizedPartBase,
+      normalizedProcessLabel,
+      String(sourceSheet || "").trim(),
+    ].join("::");
+    if (processOptionsCacheRef.current.has(cacheKey)) {
+      return processOptionsCacheRef.current.get(cacheKey);
     }
 
     const fetchOptions = async (sheet = "") => {
@@ -2605,11 +2907,14 @@ export default function SequenceEditor() {
 
     const primaryOptions = await fetchOptions(sourceSheet);
     if (primaryOptions.length || !sourceSheet) {
+      processOptionsCacheRef.current.set(cacheKey, primaryOptions);
       return primaryOptions;
     }
 
-    return fetchOptions("");
-  }, []);
+    const fallbackOptions = await fetchOptions("");
+    processOptionsCacheRef.current.set(cacheKey, fallbackOptions);
+    return fallbackOptions;
+  }, [API_BASE]);
 
   const writeSequenceDebugLog = useCallback(
     (stage, payload = {}) => {
@@ -2806,6 +3111,7 @@ export default function SequenceEditor() {
               };
             })
           );
+          const dedupedProcesses = dedupeRecommendedProcesses(processes);
 
           return {
             itemKey: [
@@ -2823,7 +3129,7 @@ export default function SequenceEditor() {
             partData: part,
             reply: result.reply || "",
             partOptions,
-            processes,
+            processes: dedupedProcesses,
           };
         })
       );
@@ -2833,7 +3139,10 @@ export default function SequenceEditor() {
         message,
         recommendationProcessTemplates
       );
-      const recommendedKeys = orderedResults.flatMap((item) =>
+      const visibleResults = dedupeRecommendationItems(
+        filterItemsToRequestedParts(orderedResults, message)
+      );
+      const recommendedKeys = visibleResults.flatMap((item) =>
         (item.processes || [])
           .map((process) => String(process.processKey || "").trim())
           .filter(Boolean)
@@ -2842,7 +3151,7 @@ export default function SequenceEditor() {
       setProcessRecommendationPopup({
         open: true,
         title,
-        items: orderedResults,
+        items: visibleResults,
         message,
       });
     },
@@ -3481,6 +3790,13 @@ export default function SequenceEditor() {
     ]);
     setChatInput("");
     setChatLoading(true);
+    setRecommendedProcessKeys([]);
+    setProcessRecommendationPopup({
+      open: false,
+      title: "",
+      items: [],
+      message: "",
+    });
 
     try {
       if (pendingOptionSelection?.items?.length) {
@@ -3494,6 +3810,12 @@ export default function SequenceEditor() {
         : [];
 
       if (!recommendedParts.length) {
+        setProcessRecommendationPopup({
+          open: false,
+          title: "",
+          items: [],
+          message: "",
+        });
         setChatMessages((prev) => [
           ...prev,
           {
@@ -3525,6 +3847,12 @@ export default function SequenceEditor() {
       ]);
     } catch (error) {
       console.error(error);
+      setProcessRecommendationPopup({
+        open: false,
+        title: "",
+        items: [],
+        message: "",
+      });
       setChatMessages((prev) => [
         ...prev,
         {
@@ -4019,7 +4347,9 @@ export default function SequenceEditor() {
     const handleOptionCheckRequest = (event) => {
       const nodes = flowStateRef.current?.nodes || [];
       const missingCount = nodes.filter(
-        (node) => !String(node.data?.option || "").trim()
+        (node) =>
+          node?.data?.manualCustom !== true &&
+          !String(node.data?.option || "").trim()
       ).length;
       event.detail?.respond?.(missingCount);
     };
@@ -4053,7 +4383,6 @@ export default function SequenceEditor() {
     return <div style={{ padding: 16 }}>시퀀스 작업 세트를 준비하는 중입니다...</div>;
   }
 
-  const loading = loadingParts || loadingProcesses;
   // ===============================
   // UI
   // ===============================
@@ -4102,74 +4431,107 @@ export default function SequenceEditor() {
           <div
             style={{
               display: "flex",
+              flexDirection: "column",
               gap: 12,
-              alignItems: "center",
               padding: 12,
               borderTop: "1px solid #e5e7eb",
             }}
           >
-            <Select
-              showSearch
-              allowClear
-              placeholder="시트 선택"
-              value={manualSheet || undefined}
-              onChange={(value) => setManualSheet(value || "")}
-              options={manualSheets.map((sheet) => ({
-                value: sheet,
-                label: sheet,
-              }))}
-              filterOption={manualSelectFilterOption}
-              style={{ minWidth: 200 }}
-            />
-
-            <Select
-              showSearch
-              allowClear
-              placeholder="부품 기준 선택"
-              value={manualPartBase || undefined}
-              onChange={(value) => setManualPartBase(value || "")}
-              disabled={!manualSheet}
-              options={manualPartBases.map((part) => ({
-                value: part,
-                label: part,
-              }))}
-              filterOption={manualSelectFilterOption}
-              style={{ minWidth: 200 }}
-            />
-
-            <button
-              type="button"
-              onClick={addManualPartNode}
-              disabled={!manualSheet || !manualPartBase}
-              style={actionButtonStyle}
+            <div
+              style={{
+                display: "flex",
+                gap: 12,
+                alignItems: "center",
+                flexWrap: "wrap",
+                width: "100%",
+              }}
             >
-              노드 추가
-            </button>
+              <Select
+                showSearch
+                allowClear
+                placeholder="시트 선택"
+                value={manualSheet || undefined}
+                onChange={(value) => setManualSheet(value || "")}
+                options={manualSheets.map((sheet) => ({
+                  value: sheet,
+                  label: sheet,
+                }))}
+                filterOption={manualSelectFilterOption}
+                style={{ minWidth: 200 }}
+              />
 
-            <div style={{ width: 1, height: 28, background: "#e5e7eb", margin: "0 4px" }} />
+              <Select
+                showSearch
+                allowClear
+                placeholder="부품 기준 선택"
+                value={manualPartBase || undefined}
+                onChange={(value) => setManualPartBase(value || "")}
+                disabled={!manualSheet}
+                options={manualPartBases.map((part) => ({
+                  value: part,
+                  label: part,
+                }))}
+                filterOption={manualSelectFilterOption}
+                style={{ minWidth: 200 }}
+              />
 
-            <Select
-              showSearch
-              allowClear
-              placeholder="부품명 검색으로 추가"
-              value={manualSearchKey || undefined}
-              onChange={(value) => setManualSearchKey(value || "")}
-              options={manualAllParts.map(({ partBase, sheet }) => ({
-                value: `${partBase}::${sheet}`,
-                label: `${partBase} (${sheet})`,
-              }))}
-              filterOption={manualSelectFilterOption}
-              style={{ minWidth: 260 }}
-            />
+              <button
+                type="button"
+                onClick={addManualPartNode}
+                disabled={!manualSheet || !manualPartBase}
+                style={actionButtonStyle}
+              >
+                노드 추가
+              </button>
 
-            <button
-              type="button"
-              onClick={addSearchPartNode}
-              disabled={!manualSearchKey}
-              style={actionButtonStyle}
-            >
-              노드 추가
-            </button>
+              <div style={{ width: 1, height: 28, background: "#e5e7eb", margin: "0 4px" }} />
+
+              <Select
+                showSearch
+                allowClear
+                placeholder="부품명 검색으로 추가"
+                value={manualSearchKey || undefined}
+                onChange={(value) => setManualSearchKey(value || "")}
+                options={manualAllParts.map(({ partBase, sheet }) => ({
+                  value: `${partBase}::${sheet}`,
+                  label: `${partBase} (${sheet})`,
+                }))}
+                filterOption={manualSelectFilterOption}
+                style={{ minWidth: 260 }}
+              />
+
+              <button
+                type="button"
+                onClick={addSearchPartNode}
+                disabled={!manualSearchKey}
+                style={actionButtonStyle}
+              >
+                노드 추가
+              </button>
+
+              <input
+                type="text"
+                placeholder="부품명 직접 입력"
+                value={manualCustomPartName}
+                onChange={(event) => setManualCustomPartName(event.target.value)}
+                style={{
+                  minWidth: 220,
+                  height: 34,
+                  padding: "0 10px",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: 8,
+                }}
+              />
+
+              <button
+                type="button"
+                onClick={addCustomManualNode}
+                disabled={!String(manualCustomPartName || "").trim()}
+                style={actionButtonStyle}
+              >
+                수동 추가
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -4199,7 +4561,7 @@ export default function SequenceEditor() {
           <SequencePalette
             parts={inhouseParts}
             processes={processTemplates}
-            loading={loading}
+            loading={loadingParts}
             error={error}
             usedPartNodeNames={usedPartNodeNames}
             selectedPartNodeNames={selectedPalettePartNodeNames}

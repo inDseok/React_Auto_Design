@@ -5,7 +5,8 @@ import NodeActionTooltip from "./NodeActionTooltip";
 export default function PartNode({ data, selected }) {
   const { inhouse, statusLabel, isAssemblyImported } = data;
   const visibleLabel = data.displayLabel ?? data.partBase ?? data.partId;
-  const isOptionMissing = !String(data.option || "").trim();
+  const isManualCustom = data.manualCustom === true;
+  const isOptionMissing = !isManualCustom && !String(data.option || "").trim();
   const handleColor = isAssemblyImported ? "#0f766e" : "#2563eb";
   const [hovered, setHovered] = useState(false);
   const rootRef = useRef(null);

@@ -50,7 +50,7 @@ export default function NodeActionTooltip({
 
   const partBase = normalizeValue(
     type === "PART"
-      ? data?.displayLabel || data?.partBase || data?.contextPartBase || data?.partId
+      ? data?.partBase || data?.displayLabel || data?.contextPartBase || data?.partId
       : data?.partBase || data?.contextPartBase || data?.partId
   );
   const optionValue = normalizeValue(data?.option);

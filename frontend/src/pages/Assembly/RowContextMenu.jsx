@@ -8,7 +8,7 @@ function RowContextMenu({
   onInsertNewGroup,
   onDeleteRow,
   onDeleteGroup,
-  onDeleteOptionGroup,
+  onDeletePartBlock,
 }) {
   const menuRef = useRef(null);
 
@@ -52,7 +52,7 @@ function RowContextMenu({
       <MenuItem label="새 그룹 추가" onClick={onInsertNewGroup} />
       <hr style={{ margin: "4px 0" }} />
       <MenuItem label="이 행 삭제" onClick={onDeleteRow} />
-      <MenuItem label="이 옵션 삭제" onClick={onDeleteOptionGroup} />
+      <MenuItem label="이 부품 삭제" onClick={onDeletePartBlock} />
       <MenuItem label="그룹 전체 삭제" onClick={onDeleteGroup} danger />
     </div>
   );

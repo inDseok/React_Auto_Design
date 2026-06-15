@@ -172,7 +172,7 @@ export default function AssemblyTable({
   onDeleteGroup,
   onCellChange,
   onRowsChange,
-  onDeleteOptionGroup,
+  onDeletePartBlock,
   onGroupLabelChange,
 }) {
 
@@ -735,6 +735,7 @@ export default function AssemblyTable({
                                 textAlign: "center",
                               }}
                             >
+                              <option value=""></option>
                               <option value="낭비">낭비</option>
                               <option value="필비">필비</option>
                               <option value="가치">가치</option>
@@ -865,8 +866,12 @@ export default function AssemblyTable({
             hideMenu();
           }}
 
-          onDeleteOptionGroup={() => {
-            onDeleteOptionGroup(contextMenu.row.__groupKey, contextMenu.row["OPTION"]);
+          onDeletePartBlock={() => {
+            onDeletePartBlock(
+              contextMenu.row.__groupKey,
+              contextMenu.row.__partInstanceKey,
+              contextMenu.row["부품 기준"]
+            );
             hideMenu();
           }}
         />

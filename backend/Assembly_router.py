@@ -848,52 +848,9 @@ def _load_sequence_entries(root_dir: Path, spec: str) -> List[Dict[str, Any]]:
             for node_id in node_ids
             if _as_clean_str(node_id)
         ]
-        if len(normalized_node_ids) <= 1:
-            return normalized_node_ids
-
-        node_set = set(normalized_node_ids)
-        node_index = {node_id: idx for idx, node_id in enumerate(normalized_node_ids)}
-        indegree = {node_id: 0 for node_id in normalized_node_ids}
-        adjacency = {node_id: [] for node_id in normalized_node_ids}
-
-        for edge_idx, edge in enumerate(edges):
-            if not isinstance(edge, dict):
-                continue
-
-            source = _as_clean_str(edge.get("source"))
-            target = _as_clean_str(edge.get("target"))
-            if source not in node_set or target not in node_set:
-                continue
-
-            adjacency[source].append((edge_idx, target))
-            indegree[target] += 1
-
-        for source in adjacency:
-            adjacency[source].sort(key=lambda item: item[0])
-
-        queue = [node_id for node_id in normalized_node_ids if indegree[node_id] == 0]
-        ordered = []
-        seen = set()
-
-        while queue:
-            current = queue.pop(0)
-            if current in seen:
-                continue
-            seen.add(current)
-            ordered.append(current)
-
-            for _, target in adjacency[current]:
-                indegree[target] -= 1
-                if indegree[target] == 0:
-                    queue.append(target)
-
-            queue.sort(key=lambda node_id: node_index[node_id])
-
-        for node_id in normalized_node_ids:
-            if node_id not in seen:
-                ordered.append(node_id)
-
-        return ordered
+        # 시퀀스 캔버스에서 정리된 group.nodeIds 순서를 그대로 사용한다.
+        # 추가 위상 정렬을 하면 수동 추가 노드가 의도치 않게 앞쪽으로 재배치될 수 있다.
+        return normalized_node_ids
 
     def add_entry(
         group_key: str,
@@ -906,8 +863,9 @@ def _load_sequence_entries(root_dir: Path, spec: str) -> List[Dict[str, Any]]:
         source_sheet: str,
         repeat_weight: Optional[float],
         worker: str,
+        manual_custom: bool = False,
     ) -> None:
-        key = (group_key, instance_key, node_type, part_base, option, process_label)
+        key = (group_key, instance_key, node_type, part_base, option, process_label, manual_custom)
         if key in index_by_key:
             idx = index_by_key[key]
             if entries[idx].get("repeatWeight") is None and repeat_weight is not None:
@@ -928,6 +886,7 @@ def _load_sequence_entries(root_dir: Path, spec: str) -> List[Dict[str, Any]]:
             "sourceSheet": source_sheet,
             "repeatWeight": repeat_weight,
             "worker": worker,
+            "manualCustom": manual_custom,
         })
 
     for i, group in enumerate(groups):
@@ -956,21 +915,26 @@ def _load_sequence_entries(root_dir: Path, spec: str) -> List[Dict[str, Any]]:
             if not isinstance(payload, dict):
                 continue
             node_type = _as_clean_str(node.get("type")).upper() or "PART"
+            manual_custom = payload.get("manualCustom") is True
 
             part_base = _as_clean_str(payload.get("partBase"))
             source_sheet = _as_clean_str(payload.get("sourceSheet"))
             process_label = _derive_sequence_process_label(payload, node_type)
-            option, source_sheet = _resolve_sequence_option(
-                part_base=part_base,
-                option=payload.get("option"),
-                source_sheet=source_sheet,
-            )
             if not part_base:
                 continue
-            if not option:
-                option = _fallback_first_option(part_base, source_sheet)
-            if not option:
-                continue
+
+            if manual_custom:
+                option = ""
+            else:
+                option, source_sheet = _resolve_sequence_option(
+                    part_base=part_base,
+                    option=payload.get("option"),
+                    source_sheet=source_sheet,
+                )
+                if not option:
+                    option = _fallback_first_option(part_base, source_sheet)
+                if not option:
+                    continue
 
             rw = _to_positive_number(payload.get("repeatWeight"))
             worker = _as_clean_str(payload.get("worker")) or worker_by_node_id.get(node_id, "")
@@ -986,6 +950,7 @@ def _load_sequence_entries(root_dir: Path, spec: str) -> List[Dict[str, Any]]:
                 source_sheet=source_sheet,
                 repeat_weight=rw,
                 worker=worker,
+                manual_custom=manual_custom,
             )
 
     for node_id in node_order:
@@ -996,21 +961,26 @@ def _load_sequence_entries(root_dir: Path, spec: str) -> List[Dict[str, Any]]:
         if not isinstance(payload, dict):
             continue
         node_type = _as_clean_str(node.get("type")).upper() or "PART"
+        manual_custom = payload.get("manualCustom") is True
 
         part_base = _as_clean_str(payload.get("partBase"))
         source_sheet = _as_clean_str(payload.get("sourceSheet"))
         process_label = _derive_sequence_process_label(payload, node_type)
-        option, source_sheet = _resolve_sequence_option(
-            part_base=part_base,
-            option=payload.get("option"),
-            source_sheet=source_sheet,
-        )
         if not part_base:
             continue
-        if not option:
-            option = _fallback_first_option(part_base, source_sheet)
-        if not option:
-            continue
+
+        if manual_custom:
+            option = ""
+        else:
+            option, source_sheet = _resolve_sequence_option(
+                part_base=part_base,
+                option=payload.get("option"),
+                source_sheet=source_sheet,
+            )
+            if not option:
+                option = _fallback_first_option(part_base, source_sheet)
+            if not option:
+                continue
 
         rw = _to_positive_number(payload.get("repeatWeight"))
         worker = _as_clean_str(payload.get("worker")) or worker_by_node_id.get(node_id, "")
@@ -1025,6 +995,7 @@ def _load_sequence_entries(root_dir: Path, spec: str) -> List[Dict[str, Any]]:
             source_sheet=source_sheet,
             repeat_weight=rw,
             worker=worker,
+            manual_custom=manual_custom,
         )
 
     return entries
@@ -1065,6 +1036,27 @@ def _build_assembly_rows_from_sequence_entries(
         sequence_instance_key = entry["instanceKey"]
         repeat_weight = entry.get("repeatWeight")
         worker = _as_clean_str(entry.get("worker"))
+        manual_custom = entry.get("manualCustom") is True
+
+        if manual_custom:
+            out_row = {
+                "부품 기준": part_base,
+                "요소작업": "",
+                "OPTION": "",
+                "작업자": worker,
+                "no": "",
+                "동작요소": "",
+                "반복횟수": "",
+                "SEC": "",
+                "TOTAL": "",
+            }
+            out_row["__groupKey"] = sequence_group_key
+            out_row["__sequenceGroupLabel"] = sequence_group_label
+            out_row["__partInstanceKey"] = sequence_instance_key
+            out_row["__sourceSheet"] = source_sheet
+            out_row["__manualCustom"] = True
+            added.append(out_row)
+            continue
 
         matched_rows = []
         candidate_sheets = (

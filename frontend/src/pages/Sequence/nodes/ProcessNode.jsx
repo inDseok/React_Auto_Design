@@ -14,7 +14,8 @@ export default function ProcessNode({ data, selected }) {
 
   const baseName = partBase || contextPartBase || "부품 기준 없음";
   const processName = operationLabel || label || partBase || "공정";
-  const isOptionMissing = !String(data.option || "").trim();
+  const isManualCustom = data.manualCustom === true;
+  const isOptionMissing = !isManualCustom && !String(data.option || "").trim();
   const handleColor = isAssemblyImported ? "#8b5cf6" : "#fb923c";
   const [hovered, setHovered] = useState(false);
   const rootRef = useRef(null);

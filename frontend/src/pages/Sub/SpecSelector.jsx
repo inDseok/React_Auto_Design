@@ -1,11 +1,28 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useApp } from "../../state/AppContext";
 import { apiGet } from "../../api/client";
-import { Spin, Button, Alert, Typography, Select, Space, Tag } from "antd";
-import { getDisplaySpecName } from "../Sequence/sequenceEditorUtils";
+import { Spin, Button, Alert, Select, Space, Tag, Progress } from "antd";
+import { getDisplaySpecName, isManualSequenceSpec } from "../Sequence/sequenceEditorUtils";
 
-const { Text } = Typography;
 const { Option } = Select;
+const POLL_INTERVAL_MS = 1500;
+const ACTIVE_STATUSES = new Set(["queued", "running", "pending"]);
+
+function getSubSpecDisplayName(spec) {
+  return isManualSequenceSpec(spec) ? "수동" : getDisplaySpecName(spec);
+}
+
+function buildStatusMessage(status) {
+  if (!status) {
+    return "";
+  }
+  return status.message || {
+    queued: "BOM 분석 작업이 대기열에 있습니다.",
+    running: "BOM 분석 작업이 진행 중입니다.",
+    completed: "BOM 분석이 완료되었습니다.",
+    failed: "BOM 분석에 실패했습니다.",
+  }[status.status] || "";
+}
 
 export default function SpecSelector() {
   const { state, actions } = useApp();
@@ -14,42 +31,106 @@ export default function SpecSelector() {
   const [loading, setLoading] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [err, setErr] = useState("");
+  const [bomStatus, setBomStatus] = useState(null);
 
   const reqIdRef = useRef(0);
-  const selectedSpecLabel = getDisplaySpecName(state.selectedSpec);
+  const pollTimerRef = useRef(null);
+  const selectedSpecLabel = getSubSpecDisplayName(state.selectedSpec);
+
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) {
+        clearTimeout(pollTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!state.bomId) {
       setSpecs([]);
       setSelected("");
+      setBomStatus(null);
+      setErr("");
       return;
     }
 
     const reqId = ++reqIdRef.current;
+    const manualSelectedSpec = isManualSequenceSpec(state.selectedSpec);
+    if (pollTimerRef.current) {
+      clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
 
     async function loadSpecs() {
+      try {
+        const data = await apiGet(`/api/sub/bom/${state.bomId}/specs`);
+        if (reqId !== reqIdRef.current) {
+          return;
+        }
+        setSpecs(Array.isArray(data) ? data : []);
+      } catch (error) {
+        if (reqId !== reqIdRef.current) {
+          return;
+        }
+        setErr(String(error?.message ?? error));
+      }
+    }
+
+    async function loadStatusAndMaybeSpecs() {
       setLoading(true);
       setErr("");
 
       try {
-        const data = await apiGet(`/api/sub/bom/${state.bomId}/specs`);
+        if (manualSelectedSpec) {
+          setBomStatus(null);
+          const manualSpecs = [state.selectedSpec].filter(Boolean);
+          setSpecs(manualSpecs);
+          if (!selected && manualSpecs[0]) {
+            setSelected(manualSpecs[0]);
+          }
+          return;
+        }
 
-        if (reqId !== reqIdRef.current) return;
+        const status = await apiGet(`/api/sub/bom/${state.bomId}/status`);
+        if (reqId !== reqIdRef.current) {
+          return;
+        }
 
-        setSpecs(data);
-      } catch (e) {
-        if (reqId !== reqIdRef.current) return;
-        setErr(String(e?.message ?? e));
+        setBomStatus(status);
+
+        if (status.status === "completed") {
+          await loadSpecs();
+          return;
+        }
+
+        if (status.status === "failed") {
+          setSpecs([]);
+          setErr(status.error_message || "BOM 분석 작업이 실패했습니다.");
+          return;
+        }
+
+        setSpecs([]);
+        pollTimerRef.current = setTimeout(loadStatusAndMaybeSpecs, POLL_INTERVAL_MS);
+      } catch (error) {
+        if (reqId !== reqIdRef.current) {
+          return;
+        }
+        setErr(String(error?.message ?? error));
       } finally {
-        if (reqId === reqIdRef.current) setLoading(false);
+        if (reqId === reqIdRef.current) {
+          setLoading(false);
+        }
       }
     }
 
-    loadSpecs();
-  }, [state.bomId]);
+    loadStatusAndMaybeSpecs();
+  }, [selected, state.bomId, state.selectedSpec]);
 
   async function onConfirm() {
-    if (!selected) return;
+    if (!selected) {
+      return;
+    }
+
     const cacheKey = `${state.bomId}::${selected}`;
     const cached = state.treeCache?.[cacheKey];
 
@@ -68,8 +149,8 @@ export default function SpecSelector() {
 
       actions.setSpec(selected);
       localStorage.setItem("spec", selected);
-    } catch (e) {
-      setErr(String(e?.message ?? e));
+    } catch (error) {
+      setErr(String(error?.message ?? error));
     } finally {
       setConfirming(false);
     }
@@ -85,6 +166,10 @@ export default function SpecSelector() {
       />
     );
   }
+
+  const isProcessing = ACTIVE_STATUSES.has(bomStatus?.status);
+  const statusMessage = buildStatusMessage(bomStatus);
+  const progressPercent = Math.max(0, Math.min(100, Number(bomStatus?.progress ?? 0)));
 
   return (
     <div
@@ -114,22 +199,38 @@ export default function SpecSelector() {
         />
       )}
 
-      <Spin spinning={loading || confirming} tip={confirming ? "트리 준비 중..." : "사양 불러오는 중..."}>
+      {bomStatus && bomStatus.status !== "completed" ? (
+        <Alert
+          type={bomStatus.status === "failed" ? "error" : "info"}
+          showIcon
+          message={bomStatus.status === "failed" ? "BOM 분석 실패" : "BOM 분석 진행 중"}
+          description={
+            <div style={{ display: "grid", gap: 10 }}>
+              <div>{statusMessage}</div>
+              {bomStatus.status !== "failed" ? <Progress percent={progressPercent} size="small" /> : null}
+            </div>
+          }
+          style={{ marginBottom: 12 }}
+        />
+      ) : null}
+
+      <Spin spinning={loading || confirming} tip={confirming ? "트리 준비 중..." : "상태 확인 중..."}>
         <Space.Compact style={{ width: "100%" }}>
           <Select
-            placeholder="사양을 선택하세요"
+            placeholder={isProcessing ? "BOM 분석이 끝나면 사양을 선택할 수 있습니다" : "사양을 선택하세요"}
             value={selected || undefined}
             onChange={(value) => setSelected(value)}
             showSearch
             optionFilterProp="children"
             style={{ width: "100%" }}
             size="large"
+            disabled={isProcessing || bomStatus?.status === "failed"}
           >
             {specs
-              .filter((s) => getDisplaySpecName(s))
-              .map((s) => (
-                <Option key={s} value={s}>
-                  {getDisplaySpecName(s)}
+              .filter((spec) => getSubSpecDisplayName(spec))
+              .map((spec) => (
+                <Option key={spec} value={spec}>
+                  {getSubSpecDisplayName(spec)}
                 </Option>
               ))}
           </Select>
@@ -137,7 +238,7 @@ export default function SpecSelector() {
           <Button
             type="primary"
             onClick={onConfirm}
-            disabled={!selected || loading || confirming}
+            disabled={!selected || loading || confirming || isProcessing || bomStatus?.status === "failed"}
             size="large"
           >
             선택
